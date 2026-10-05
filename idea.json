@@ -1,0 +1,34 @@
+{
+  "slug": "track-changes-editor",
+  "title": "Track Changes Markdown Editor",
+  "one_liner": "A browser-based Markdown editor with Word-style tracked changes and comments, built on a structured JSON layer that records every edit and the reason for it, exportable to text, Word, PDF, or JSON.",
+  "status": "seed",
+  "tags": [
+    "tooling",
+    "writing",
+    "ai"
+  ],
+  "description": "## What\n\nA text editor, starting as something that runs in a web browser.\n\n- **Markdown with preview.** Edit Markdown and show a rendered preview when wanted.\n- **Tracked changes and comments.** The most important feature: Microsoft Word-style tracked changes and comments.\n- **A structured JSON layer.** Represent the document at something like the sentence level. Each sentence can carry comments, deleted text, and notes, such as why the sentence needed to be edited.\n- **Exports.** Export the finished document as plain text, Word, PDF, or the entire JSON.\n- **A library of edited documents.** Keep a repository of edited documents. The editing history and the reasons for edits could help teach Claude better writing skills.\n\n## Why\n\nTracked changes and comments are the standard way to edit with someone else, but they live inside Word and Google Docs, which do not work well with Markdown, git, or Claude. Ordinary text diffs show what changed but not why. An editor that stores every change together with its reason makes editing reviewable, reversible, and reusable as data.\n\n## How\n\nEarly thoughts, to refine in a workshop:\n\n- **Sentences as the main unit, with stable ids.** Split the document into blocks (headings, paragraphs, list items) and blocks into sentences. Give each sentence an id that survives edits, so comments and history stay attached even when text around them changes. Handle sentences being split or merged explicitly.\n- **Changes as a log of operations.** Store each insertion, deletion, or replacement as an entry with the sentence id, the exact character range, the old and new text, the author, the time, and an optional reason. The current text and the original are both computed from the log. Accepting or rejecting a change is just another entry in the log.\n- **Comments as threads.** A comment attaches to a range inside one or more sentences and can have replies and a resolved state. A reason for an edit is a comment linked to that change.\n- **Editing view.** Show insertions and deletions inline in Word style, with comments in a side margin. Offer a clean view with all changes applied and an original view, plus accept and reject for each change, or all at once.\n- **Markdown preview.** Render with a small Markdown renderer like the one in this console, applying only the accepted text.\n- **Exports.**\n  - Plain text and Markdown, either clean or with changes marked up.\n  - Word, with real tracked changes and comments. The Word file format supports both natively, so a collaborator could keep reviewing in Word.\n  - PDF, through a print style sheet or a conversion tool.\n  - The full JSON, including history.\n- **Claude as an editor.** Claude proposes edits as tracked changes, each with a reason. Every accept or reject is a signal about what good editing looks like for this writer.\n- **The edits library.** Keep finished documents with their full history in a repo. Changes with reasons, and which suggestions were accepted, form a dataset. It could be distilled into a writing style guide or examples for a Claude skill, and used to check whether Claude's suggested edits improve. Documents and comments may contain private material, so decide what goes into the library.",
+  "open_questions": [
+    "Is the sentence the right unit, or should changes anchor to words and character ranges within paragraphs?",
+    "Should it import existing Word files with their tracked changes and comments?",
+    "Single user first, or real-time collaboration with several people?",
+    "Where are documents saved: browser storage, local files, or a git repo?",
+    "How should edit reasons be captured without slowing editing down, for example optional, from a short list, or written by Claude?",
+    "Which documents are allowed into the edits library, and how is it used to improve Claude's writing?"
+  ],
+  "notes": "- 2026-10-05: Captured from chat as a seed. The user wants a text editor, starting in the web browser, that handles Markdown with an optional preview. The main function is Microsoft Word-style tracked changes and comments. The user's design idea: a structured JSON layer representing something like each sentence, associated with comments, deleted text, and notes such as why a sentence needed editing. Extras: export as plain text, Word, PDF, or the full JSON. Looking ahead: keep a repository of edited documents, since the editing history and reasons could help train better writing skills in Claude.",
+  "links": [
+    {
+      "label": "Related: Claude Training Guides",
+      "url": "#/idea/claude-training-guides"
+    },
+    {
+      "label": "Related: Semantic Librarian for My Papers",
+      "url": "#/idea/research-paper-librarian"
+    }
+  ],
+  "plan": null,
+  "created": "2026-10-05T10:31:44.922Z",
+  "updated": "2026-10-05T10:31:44.922Z"
+}
