@@ -2,7 +2,7 @@
 
 A browser-based Markdown editor with Word-style tracked changes and comments, built on a structured JSON layer that records every edit and the reason for it. Exports to Markdown, Word, PDF, or the full JSON. Over time, a library of edited documents whose history can teach Claude to edit the way this writer edits.
 
-Status: planning. Nothing is built yet. This document is the spec for v1 and the roadmap after it.
+Status: phase 0 built (writing app with autosave, fonts, preview). This document is the spec for v1 and the roadmap after it.
 
 ---
 

@@ -1,0 +1,220 @@
+<script lang="ts">
+  import { FONTS, ROLE_LABELS, type FontRole } from '../settings/fonts';
+  import { PRESETS, type SettingsStore, type Theme } from '../settings/settings.svelte';
+
+  let { store, onclose }: { store: SettingsStore; onclose: () => void } = $props();
+  const s = $derived(store.value);
+
+  const roles: FontRole[] = ['serif', 'sans', 'mono', 'duospace'];
+  const themes: { id: Theme; label: string }[] = [
+    { id: 'system', label: 'System' },
+    { id: 'light', label: 'Light' },
+    { id: 'dark', label: 'Dark' },
+    { id: 'sepia', label: 'Sepia' },
+  ];
+</script>
+
+<aside class="settings no-print" aria-label="Settings">
+  <div class="head">
+    <span>Appearance</span>
+    <button onclick={onclose} aria-label="Close settings">×</button>
+  </div>
+
+  <section>
+    <h3>Preset</h3>
+    <div class="presets">
+      {#each PRESETS as p (p.id)}
+        <button
+          class:active={s.preset === p.id}
+          onclick={() => store.usePreset(p.id)}
+          title={p.description}
+        >
+          {p.label}
+        </button>
+      {/each}
+      {#if s.preset === 'custom'}
+        <button class="active" disabled>Custom</button>
+      {/if}
+    </div>
+  </section>
+
+  <section>
+    <h3>Fonts</h3>
+    <label>
+      <span>Editor</span>
+      <select value={s.editorFont} onchange={(e) => store.set('editorFont', e.currentTarget.value)}>
+        {#each roles as role (role)}
+          <optgroup label={ROLE_LABELS[role]}>
+            {#each FONTS.filter((f) => f.role === role) as f (f.id)}
+              <option value={f.id}>{f.label}</option>
+            {/each}
+          </optgroup>
+        {/each}
+      </select>
+    </label>
+    <label>
+      <span>Preview</span>
+      <select
+        value={s.previewFont}
+        onchange={(e) => store.set('previewFont', e.currentTarget.value)}
+      >
+        {#each roles as role (role)}
+          <optgroup label={ROLE_LABELS[role]}>
+            {#each FONTS.filter((f) => f.role === role) as f (f.id)}
+              <option value={f.id}>{f.label}</option>
+            {/each}
+          </optgroup>
+        {/each}
+      </select>
+    </label>
+    <div class="samples">
+      {#each FONTS as f (f.id)}
+        <div class="sample" style:font-family={f.stack}>
+          {f.label}: The quick brown fox jumps over the lazy dog.
+        </div>
+      {/each}
+    </div>
+  </section>
+
+  <section>
+    <h3>Type</h3>
+    <label>
+      <span>Size <output>{s.fontSize}px</output></span>
+      <input
+        type="range"
+        min="12"
+        max="24"
+        step="1"
+        value={s.fontSize}
+        oninput={(e) => store.set('fontSize', Number(e.currentTarget.value))}
+      />
+    </label>
+    <label>
+      <span>Line height <output>{s.lineHeight.toFixed(2)}</output></span>
+      <input
+        type="range"
+        min="1.2"
+        max="2"
+        step="0.05"
+        value={s.lineHeight}
+        oninput={(e) => store.set('lineHeight', Number(e.currentTarget.value))}
+      />
+    </label>
+    <label>
+      <span>Text width <output>{s.measure === 0 ? 'full' : `${s.measure}ch`}</output></span>
+      <input
+        type="range"
+        min="50"
+        max="100"
+        step="2"
+        value={s.measure === 0 ? 100 : s.measure}
+        disabled={s.measure === 0}
+        oninput={(e) => store.set('measure', Number(e.currentTarget.value))}
+      />
+    </label>
+    <label class="row">
+      <input
+        type="checkbox"
+        checked={s.measure === 0}
+        onchange={(e) => store.set('measure', e.currentTarget.checked ? 0 : 72)}
+      />
+      <span>Full width</span>
+    </label>
+  </section>
+
+  <section>
+    <h3>Theme</h3>
+    <div class="presets">
+      {#each themes as t (t.id)}
+        <button class:active={s.theme === t.id} onclick={() => store.set('theme', t.id)}
+          >{t.label}</button
+        >
+      {/each}
+    </div>
+  </section>
+
+  <section class="foot">
+    <button onclick={() => store.reset()}>Reset to defaults</button>
+  </section>
+</aside>
+
+<style>
+  .settings {
+    width: 300px;
+    flex: none;
+    border-left: 1px solid var(--border);
+    background: var(--bg-elev);
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  .head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 10px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+  }
+  section {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  h3 {
+    margin: 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg-muted);
+  }
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 13px;
+  }
+  label > span {
+    display: flex;
+    justify-content: space-between;
+    color: var(--fg-muted);
+  }
+  label.row {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+  }
+  output {
+    color: var(--fg);
+    font-variant-numeric: tabular-nums;
+  }
+  input[type='range'] {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+  .presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .presets button {
+    border: 1px solid var(--border);
+  }
+  .samples {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--fg-muted);
+    margin-top: 4px;
+  }
+  .sample {
+    line-height: 1.4;
+  }
+  .foot {
+    border-bottom: 0;
+    margin-top: auto;
+  }
+</style>
