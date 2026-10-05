@@ -40,6 +40,8 @@
   $effect(() => {
     void ws.text;
     void ws.pending;
+    void ws.threads;
+    void ws.draft;
     void layout;
     void showMargin;
     requestAnimationFrame(() => tick++);
@@ -59,6 +61,10 @@
         KeyP: () => ws.prevChange(),
         KeyM: () => (marginOpen = !marginOpen),
         KeyE: () => focusReason(),
+        KeyC: () => {
+          marginOpen = true;
+          ws.startComment();
+        },
       };
       const f = act[code];
       if (f) {
@@ -132,6 +138,10 @@
     onlayout={setLayout}
     onview={(v) => ws.setView(v)}
     ontoggletracking={() => ws.toggleTracking()}
+    oncomment={() => {
+      marginOpen = true;
+      ws.startComment();
+    }}
     ontoggledocs={() => (docsOpen = !docsOpen)}
     ontogglemargin={() => (marginOpen = !marginOpen)}
     ontogglesettings={() => (settingsOpen = !settingsOpen)}

@@ -2,7 +2,7 @@
 
 A browser-based Markdown editor with Word-style tracked changes and comments, built on a structured JSON layer that records every edit and the reason for it. Exports to Markdown, Word, PDF, or the full JSON. Over time, a library of edited documents whose history can teach Claude to edit the way this writer edits.
 
-Status: phases 0 to 2 built (writing app with autosave, fonts and preview; sentence-level model and op log; Word-style tracked changes with reasons, accept/reject, views, and model-level undo). This document is the spec for v1 and the roadmap after it.
+Status: phases 0 to 3 built (writing app with autosave, fonts and preview; sentence-level model and op log; Word-style tracked changes with reasons, accept/reject, views, and model-level undo; comment threads in the same margin). This document is the spec for v1 and the roadmap after it.
 
 ---
 
@@ -362,10 +362,11 @@ Each phase ends with something usable. Phases 0 and 1 overlap in time.
 - Author name and colour in settings.
 - Still to do within this phase, before calling v1 done: the edit pass on a real paper with a second author identity, which needs comments (phase 3) to be a fair test; a per-author filter in the margin; keyboard navigation inside cards.
 
-### Phase 3: Comments (1 week)
-- Select-and-comment, threads with replies, resolve/reopen, margin alignment, orphan handling.
-- Link a reason to a comment thread when the reason needs discussion.
-- Done when: comments survive heavy editing around them.
+### Phase 3: Comments (built)
+- Select text (or put the cursor in a word) and press ⌘⌥C or the toolbar button: a composer card appears in the margin at the anchor, the range is highlighted, Enter posts. Threads show replies, inline editing of your own comments, resolve and reopen; resolved threads are hidden unless "Show resolved" is on in the margin menu.
+- Changes and comments share one margin, in document order. A change card's 💬 opens a thread linked to that change, shown right after it and marked "↳ change".
+- Anchors ride through edits, accept, reject, undo and redo via the offset map. A thread whose text is entirely gone becomes orphaned: its card says so and sits at its block's start; undo brings the anchor back.
+- Done: comments survive heavy editing around them (property-tested at the model level, exercised in the browser).
 
 ### Phase 4: Exports (1 week)
 - Markdown clean/original/CriticMarkup, JSON with schema validation, DOCX with real revisions and comments, PDF via print.

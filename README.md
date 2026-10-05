@@ -4,7 +4,7 @@ A browser-based Markdown editor that is growing Word-style tracked changes and c
 
 ## Status
 
-Phases 0 to 2 of the plan: a Markdown writing app with Word-style tracked changes, on a sentence-level document model and op log.
+Phases 0 to 3 of the plan: a Markdown writing app with Word-style tracked changes and comments, on a sentence-level document model and op log.
 
 - CodeMirror 6 editor with Markdown highlighting and a rendered preview (editor, split, or preview layouts).
 - Background autosave to the browser's IndexedDB on every change, with flushes on blur, tab hide, and unload.
@@ -12,6 +12,7 @@ Phases 0 to 2 of the plan: a Markdown writing app with Word-style tracked change
 - Bundled open-source fonts (Source Serif 4, Literata, Source Sans 3, Inter, JetBrains Mono, iA Writer Mono, Duo, and Quattro), size, line height, text width, light, dark, sepia and system themes, and presets.
 - Every edit is recorded as an operation against a document model of blocks, sentences and spans (`src/model/`), with ids that survive editing. Documents are stored as an append-only op log plus periodic snapshots, so nothing about the editing history is lost.
 - Track changes: turn it on and deletions stay struck through, insertions are underlined, and each change gets a card in the margin with author, time, before and after text, a reason (chips plus free text), and accept and reject. Markup, clean, and original views. Undo and redo work on changes, not just text.
+- Comments: select text and press ⌘⌥C to open a thread in the margin, with replies, resolve and reopen, and threads attached to a change. Anchors follow the text through edits and undo; a thread whose text is removed is kept and marked as orphaned.
 
 Tracked changes, comments, exports, the edits library, and Claude as an editor come in later phases.
 
@@ -44,7 +45,8 @@ Pushes to `main` deploy to GitHub Pages via `.github/workflows/deploy.yml`.
 | ⌘⌥A / ⌘⌥R          | Accept / reject the change at the cursor |
 | ⌘⌥N / ⌘⌥P          | Next / previous change                   |
 | ⌘⌥E                | Add a reason to the change at the cursor |
-| ⌘⌥M                | Show or hide the changes margin          |
+| ⌘⌥C                | Comment on the selection                 |
+| ⌘⌥M                | Show or hide the margin                  |
 | ⌘Z / ⌘⇧Z           | Undo / redo (through the model)          |
 
 ## License

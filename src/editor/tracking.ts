@@ -19,7 +19,7 @@ import {
   Transaction,
 } from '@codemirror/state';
 import { Decoration, EditorView, type DecorationSet } from '@codemirror/view';
-import type { MarkedRange } from '../model/views';
+import type { CommentRange, MarkedRange } from '../model/views';
 
 /** One replaced range, in the coordinates of the document before the transaction. */
 export type TextChange = { from: number; to: number; insert: string };
@@ -46,6 +46,10 @@ export type MarkInfo = {
   ranges: MarkedRange[];
   colors: Record<string, string>;
   activeChangeId?: string;
+  comments?: CommentRange[];
+  activeThreadId?: string;
+  /** A comment being composed: highlighted like a thread until it is posted or cancelled. */
+  draft?: { from: number; to: number };
 };
 
 export const setMarks = StateEffect.define<MarkInfo>();
@@ -68,6 +72,24 @@ function build(info: MarkInfo): MarksValue {
       }).range(r.from, r.to),
     );
     if (r.kind === 'del') atoms.push(atomicMark.range(r.from, r.to));
+  }
+  for (const c of info.comments ?? []) {
+    if (c.to <= c.from || c.resolved) continue;
+    const active = c.threadId === info.activeThreadId;
+    decos.push(
+      Decoration.mark({
+        class: `cm-comment${active ? ' cm-comment-active' : ''}`,
+        attributes: { 'data-thread': c.threadId },
+      }).range(c.from, c.to),
+    );
+  }
+  if (info.draft && info.draft.to > info.draft.from) {
+    decos.push(
+      Decoration.mark({ class: 'cm-comment cm-comment-active' }).range(
+        info.draft.from,
+        info.draft.to,
+      ),
+    );
   }
   decos.sort((a, b) => a.from - b.from || a.to - b.to);
   atoms.sort((a, b) => a.from - b.from);
@@ -147,6 +169,13 @@ export const trackingTheme = EditorView.baseTheme({
     textDecoration: 'line-through',
     textDecorationColor: 'var(--author-color)',
     opacity: '0.72',
+  },
+  '.cm-comment': {
+    backgroundColor: 'color-mix(in srgb, #eab308 28%, transparent)',
+    borderBottom: '2px solid color-mix(in srgb, #eab308 70%, transparent)',
+  },
+  '.cm-comment-active': {
+    backgroundColor: 'color-mix(in srgb, #eab308 45%, transparent)',
   },
   '.cm-change-active': {
     backgroundColor: 'color-mix(in srgb, var(--author-color) 14%, transparent)',

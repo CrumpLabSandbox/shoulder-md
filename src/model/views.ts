@@ -125,3 +125,40 @@ export function mapOffset(state: State, offset: number, to: 'clean' | 'original'
 export function blockOf(state: State, sentenceId: string): Block | undefined {
   return state.blocks.find((b) => b.sentences.some((s) => s.id === sentenceId));
 }
+
+export type CommentRange = {
+  threadId: string;
+  from: number;
+  to: number;
+  resolved: boolean;
+  /** True when the anchored text is gone and the thread hangs off a block (or the document). */
+  orphaned: boolean;
+  changeId?: string;
+};
+
+/** Absolute revision ranges of every comment thread. Orphaned threads sit at their block's start. */
+export function commentRanges(state: State): CommentRange[] {
+  const locs = locate(state);
+  const byId = new Map(locs.map((l) => [l.sentenceId, l]));
+  const out: CommentRange[] = [];
+  for (const t of state.comments) {
+    const base = {
+      threadId: t.id,
+      resolved: t.resolved,
+      ...(t.changeId ? { changeId: t.changeId } : {}),
+    };
+    if (t.anchor) {
+      const first = byId.get(t.anchor.sentenceIds[0]!);
+      const last = byId.get(t.anchor.sentenceIds[t.anchor.sentenceIds.length - 1]!);
+      if (first && last) {
+        const from = first.from + t.anchor.from;
+        out.push({ ...base, from, to: Math.max(from, last.from + t.anchor.to), orphaned: false });
+        continue;
+      }
+    }
+    const block = t.blockId ? state.blocks.find((b) => b.id === t.blockId) : undefined;
+    const at = block?.sentences[0] ? (byId.get(block.sentences[0].id)?.from ?? 0) : 0;
+    out.push({ ...base, from: at, to: at, orphaned: true });
+  }
+  return out.sort((a, b) => a.from - b.from);
+}

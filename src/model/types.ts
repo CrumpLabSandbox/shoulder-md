@@ -77,6 +77,8 @@ export type CommentThread = {
   anchor: CommentAnchor | null;
   /** Fallback anchor, set when the range is orphaned. */
   blockId?: string;
+  /** The anchor the thread had before it was orphaned; restored if those sentences return (undo). */
+  orphanedFrom?: CommentAnchor;
   /** Set when the thread is the discussion of a change's reason. */
   changeId?: string;
   resolved: boolean;

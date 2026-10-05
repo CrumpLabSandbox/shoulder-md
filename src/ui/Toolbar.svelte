@@ -17,6 +17,7 @@
     onlayout,
     onview,
     ontoggletracking,
+    oncomment,
     ontoggledocs,
     ontogglemargin,
     ontogglesettings,
@@ -37,6 +38,7 @@
     onlayout: (layout: Layout) => void;
     onview: (view: View) => void;
     ontoggletracking: () => void;
+    oncomment: () => void;
     ontoggledocs: () => void;
     ontogglemargin: () => void;
     ontogglesettings: () => void;
@@ -89,6 +91,9 @@
     >
       <span class="led"></span>Track changes
     </button>
+    <button onclick={oncomment} title="Comment on the selection (⌘⌥C)" aria-label="Comment"
+      >💬</button
+    >
     <div class="segmented" role="group" aria-label="View">
       {#each views as v (v.id)}
         <button class:active={view === v.id} onclick={() => onview(v.id)} title={v.hint}

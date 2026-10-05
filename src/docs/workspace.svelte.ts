@@ -13,7 +13,15 @@ import { nowIso, isoAt } from '../util/time';
 import { countWords } from '../util/text';
 import type { Author, Document, Op } from '../model/types';
 import { appendOp, revisionText } from '../model/apply';
-import { absoluteToPos, markedRanges, text as viewText, type View } from '../model/views';
+import {
+  absoluteToPos,
+  commentRanges,
+  markedRanges,
+  text as viewText,
+  type CommentRange,
+  type View,
+} from '../model/views';
+import type { CommentThread } from '../model/types';
 import {
   pendingChanges,
   shouldCoalesce,
@@ -91,6 +99,23 @@ export function createWorkspace(initialAuthor: Author) {
     view === 'revision' || !current ? text : viewText(current.state, view),
   );
 
+  /* ---------- comments ---------- */
+
+  let showResolved = $state(false);
+  let draft = $state.raw<{ from: number; to: number } | undefined>(undefined);
+  const threads = $derived<Thread[]>(
+    current
+      ? commentRanges(current.state).map((r) => ({
+          ...r,
+          thread: current!.state.comments.find((t) => t.id === r.threadId)!,
+        }))
+      : [],
+  );
+  const visibleThreads = $derived(threads.filter((t) => showResolved || !t.resolved));
+  const activeThreadId = $derived<string | undefined>(
+    visibleThreads.find((t) => !t.orphaned && cursor >= t.from && cursor <= t.to)?.threadId,
+  );
+
   const autosave = createAutosave<SaveBatch>({
     save: async ({ doc, ops, force }) => {
       await appendOps(doc, ops, { forceSnapshot: force });
@@ -153,6 +178,7 @@ export function createWorkspace(initialAuthor: Author) {
     current = loaded.doc;
     text = revisionText(loaded.doc.state);
     view = 'revision';
+    draft = undefined;
     lastEdit = undefined;
     undoStack = [];
     redoStack = [];
@@ -193,15 +219,26 @@ export function createWorkspace(initialAuthor: Author) {
 
   function pushMarks() {
     if (!bridge || !current || view !== 'revision') return;
-    const info = { ranges: markedRanges(current.state), colors, activeChangeId };
+    const info = {
+      ranges: markedRanges(current.state),
+      colors,
+      activeChangeId,
+      comments: visibleThreads.map(({ thread: _t, ...r }) => {
+        void _t;
+        return r;
+      }),
+      activeThreadId,
+      draft,
+    };
     // Marks may be pushed from inside an editor update; defer the dispatch past it.
     queueMicrotask(() => bridge?.setMarks(info));
   }
 
   function setCursor(sel: Selection) {
-    const was = activeChangeId;
+    const wasChange = activeChangeId;
+    const wasThread = activeThreadId;
     cursor = sel.head;
-    if (activeChangeId !== was) pushMarks();
+    if (activeChangeId !== wasChange || activeThreadId !== wasThread) pushMarks();
   }
 
   /* ---------- applying ops ---------- */
@@ -406,6 +443,125 @@ export function createWorkspace(initialAuthor: Author) {
     schedule([r.op], ts);
   }
 
+  /** Starts composing a comment on the current selection (or the word at the cursor). */
+  function startComment(): boolean {
+    if (!current || !bridge || view !== 'revision') return false;
+    const sel = bridge.getSelection();
+    let from = Math.min(sel.anchor, sel.head);
+    let to = Math.max(sel.anchor, sel.head);
+    if (from === to) {
+      // No selection: the word at the cursor.
+      const t = text;
+      while (from > 0 && /[\p{L}\p{N}'’-]/u.test(t[from - 1]!)) from--;
+      while (to < t.length && /[\p{L}\p{N}'’-]/u.test(t[to]!)) to++;
+      if (from === to) return false;
+    }
+    draft = { from, to };
+    pushMarks();
+    return true;
+  }
+
+  function cancelComment() {
+    draft = undefined;
+    pushMarks();
+  }
+
+  function anchorFor(from: number, to: number) {
+    if (!current) throw new Error('No open document');
+    const start = absoluteToPos(current.state, from);
+    const end = absoluteToPos(current.state, Math.max(from, to));
+    const ids: string[] = [];
+    let collecting = false;
+    outer: for (const b of current.state.blocks)
+      for (const s of b.sentences) {
+        if (s.id === start.sentenceId) collecting = true;
+        if (collecting) ids.push(s.id);
+        if (s.id === end.sentenceId) break outer;
+      }
+    return { sentenceIds: ids, from: start.offset, to: end.offset };
+  }
+
+  /** Posts the draft comment, or a comment on a change. */
+  function addComment(body: string, opts: { changeId?: string } = {}): string | undefined {
+    if (!current || !body.trim()) return undefined;
+    let range = draft;
+    if (opts.changeId) {
+      const c = pending.find((x) => x.id === opts.changeId);
+      range = c ? { from: c.ranges[0]!.from, to: c.ranges[c.ranges.length - 1]!.to } : undefined;
+    }
+    if (!range) return undefined;
+    const ts = nowIso();
+    const threadId = ulid();
+    const op: Op = {
+      id: ulid(),
+      type: 'comment_add',
+      author: author.id,
+      ts,
+      threadId,
+      commentId: ulid(),
+      anchor: anchorFor(range.from, range.to),
+      body: body.trim(),
+      ...(opts.changeId ? { changeId: opts.changeId } : {}),
+    };
+    const r = push(op);
+    schedule([r.op], ts);
+    draft = undefined;
+    pushMarks();
+    return threadId;
+  }
+
+  function reply(threadId: string, body: string) {
+    if (!current || !body.trim()) return;
+    const ts = nowIso();
+    const r = push({
+      id: ulid(),
+      type: 'comment_reply',
+      author: author.id,
+      ts,
+      threadId,
+      commentId: ulid(),
+      body: body.trim(),
+    });
+    schedule([r.op], ts);
+  }
+
+  function editComment(threadId: string, commentId: string, body: string) {
+    if (!current || !body.trim()) return;
+    const ts = nowIso();
+    const r = push({
+      id: ulid(),
+      type: 'comment_edit',
+      author: author.id,
+      ts,
+      threadId,
+      commentId,
+      body: body.trim(),
+    });
+    schedule([r.op], ts);
+  }
+
+  function setResolved(threadId: string, resolved: boolean) {
+    if (!current) return;
+    const ts = nowIso();
+    const r = push({
+      id: ulid(),
+      type: 'comment_resolve',
+      author: author.id,
+      ts,
+      threadId,
+      resolved,
+    });
+    schedule([r.op], ts);
+    pushMarks();
+  }
+
+  function jumpToThread(threadId: string) {
+    const t = threads.find((x) => x.threadId === threadId);
+    if (!t || !bridge) return;
+    bridge.setSelection({ anchor: t.from, head: t.from });
+    bridge.focus();
+  }
+
   function jumpTo(changeId: string) {
     const c = pending.find((x) => x.id === changeId);
     if (!c || !bridge) return;
@@ -430,6 +586,7 @@ export function createWorkspace(initialAuthor: Author) {
   function setView(v: View) {
     if (v === view || !current) return;
     view = v;
+    draft = undefined;
     if (bridge) {
       bridge.setText(displayTextFor(v), { readOnly: v !== 'revision' });
       if (v === 'revision') pushMarks();
@@ -498,6 +655,32 @@ export function createWorkspace(initialAuthor: Author) {
     get canUndo() {
       return canUndo;
     },
+    get threads() {
+      return visibleThreads;
+    },
+    get allThreads() {
+      return threads;
+    },
+    get activeThreadId() {
+      return activeThreadId;
+    },
+    get draft() {
+      return draft;
+    },
+    get showResolved() {
+      return showResolved;
+    },
+    setShowResolved(v: boolean) {
+      showResolved = v;
+      pushMarks();
+    },
+    startComment,
+    cancelComment,
+    addComment,
+    reply,
+    editComment,
+    setResolved,
+    jumpToThread,
     get canRedo() {
       return canRedo;
     },
@@ -544,6 +727,8 @@ export function createWorkspace(initialAuthor: Author) {
 }
 
 export type Workspace = ReturnType<typeof createWorkspace>;
+
+export type Thread = CommentRange & { thread: CommentThread };
 
 function mergeAuthors(known: readonly Author[], me: Author): Author[] {
   return [me, ...known.filter((a) => a.id !== me.id)];

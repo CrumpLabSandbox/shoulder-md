@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { harness } from './helpers/model';
 import { replay } from '../src/model/apply';
 import { pendingChanges, shouldCoalesce } from '../src/model/changes';
-import { markedRanges, mapOffset } from '../src/model/views';
+import { markedRanges, mapOffset, commentRanges } from '../src/model/views';
 import { OffsetMap } from '../src/model/spans';
 import { hashState } from '../src/model/hash';
 import { keptText } from '../src/model/spans';
@@ -208,6 +208,25 @@ describe('comments', () => {
     expect(h.ids()).toEqual([s3]);
   });
 
+  it('re-anchors an orphaned thread when undo brings its sentences back', () => {
+    const h = harness('First sentence here. Second one.', { tracking: false });
+    const [s1] = h.ids();
+    h.op({
+      type: 'comment_add',
+      threadId: 't1',
+      commentId: 'k1',
+      body: 'x',
+      anchor: { sentenceIds: [s1!], from: 6, to: 19 },
+    });
+    h.edit(0, 21, '');
+    expect(h.state.comments[0]!.anchor).toBeNull();
+    expect(h.state.comments[0]!.orphanedFrom).toEqual({ sentenceIds: [s1], from: 6, to: 19 });
+    h.applyOps(h.inverse);
+    expect(h.ids()[0]).toBe(s1);
+    expect(h.state.comments[0]!.anchor).toEqual({ sentenceIds: [s1], from: 6, to: 19 });
+    expect(h.state.comments[0]!.orphanedFrom).toBeUndefined();
+  });
+
   it('reply, edit, resolve', () => {
     const h = harness('A.');
     h.op({
@@ -383,5 +402,40 @@ describe('keptText', () => {
     expect(keptText(spans, 1, 5, 'alice')).toBe('bc');
     expect(keptText(spans, 2, 4, 'alice')).toBe('');
     expect(keptText(spans, 2, 4, 'bob')).toBe('XY');
+  });
+});
+
+describe('commentRanges', () => {
+  it('gives absolute ranges, sorted, and places orphans at their block', () => {
+    const h = harness('One two. Three four.\n\nNext para.', { tracking: false });
+    const [s1, s2, s3] = h.ids();
+    h.op({
+      type: 'comment_add',
+      threadId: 'b',
+      commentId: 'k',
+      body: 'x',
+      anchor: { sentenceIds: [s3!], from: 0, to: 4 },
+    });
+    h.op({
+      type: 'comment_add',
+      threadId: 'a',
+      commentId: 'k2',
+      body: 'y',
+      anchor: { sentenceIds: [s1!, s2!], from: 4, to: 5 },
+    });
+    expect(commentRanges(h.state).map((r) => [r.threadId, r.from, r.to, r.orphaned])).toEqual([
+      ['a', 4, 14, false],
+      ['b', 22, 26, false],
+    ]);
+    h.edit(0, 20, ''); // first paragraph's text gone → thread a orphaned at block start
+    const ranges = commentRanges(h.state);
+    const a = ranges.find((r) => r.threadId === 'a')!;
+    expect(a.orphaned).toBe(true);
+    expect(a.from).toBe(0);
+    expect(ranges.find((r) => r.threadId === 'b')).toMatchObject({
+      from: 2,
+      to: 6,
+      orphaned: false,
+    });
   });
 });

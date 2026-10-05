@@ -336,14 +336,31 @@ function captureAnchors(state: State): CapturedAnchor[] {
   return out;
 }
 
-/** Re-anchors threads after the op, orphaning any whose text vanished entirely. */
+/**
+ * Re-anchors threads after the op, orphaning any whose text vanished entirely. An orphaned
+ * thread remembers its last anchor and takes it back when those sentences exist again.
+ */
 function restoreAnchors(next: State, captured: CapturedAnchor[], map: OffsetMap): CommentThread[] {
   const byThread = new Map(captured.map((c) => [c.threadId, c]));
   const locs = locate(next);
+  const locById = new Map(locs.map((l) => [l.sentenceId, l]));
   const blockIds = new Set(next.blocks.map((b) => b.id));
   return next.comments.map((t) => {
     const c = byThread.get(t.id);
-    if (!c) return t;
+    if (!c) {
+      if (t.anchor || !t.orphanedFrom) return t;
+      const o = t.orphanedFrom;
+      const first = locById.get(o.sentenceIds[0]!);
+      const last = locById.get(o.sentenceIds[o.sentenceIds.length - 1]!);
+      if (!first || !last || !o.sentenceIds.every((id) => locById.has(id))) return t;
+      const from = Math.min(o.from, first.to - first.from);
+      const to = Math.min(o.to, last.to - last.from);
+      if (first.from + from >= last.from + to) return t;
+      const { blockId: _b, orphanedFrom: _o, ...rest } = t;
+      void _b;
+      void _o;
+      return { ...rest, anchor: { sentenceIds: o.sentenceIds, from, to } };
+    }
     const from = map.map(c.from, 1);
     const to = Math.max(from, map.map(c.to, -1));
     const hadText = c.to > c.from;
@@ -351,7 +368,12 @@ function restoreAnchors(next: State, captured: CapturedAnchor[], map: OffsetMap)
       const at = absoluteToPos(next, from);
       const block = locs.find((l) => l.sentenceId === at.sentenceId)?.blockId;
       const fallback = c.blockId && blockIds.has(c.blockId) ? c.blockId : block;
-      return { ...t, anchor: null, ...(fallback ? { blockId: fallback } : {}) };
+      return {
+        ...t,
+        anchor: null,
+        ...(fallback ? { blockId: fallback } : {}),
+        ...(t.anchor ? { orphanedFrom: t.anchor } : {}),
+      };
     }
     const start = absoluteToPos(next, from);
     const end = absoluteToPos(next, to);

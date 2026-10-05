@@ -11,6 +11,7 @@
     onreject,
     onreason,
     onjump,
+    oncomment,
   }: {
     change: PendingChange;
     color: string;
@@ -20,7 +21,17 @@
     onreject: () => void;
     onreason: (reason: string | undefined, tags: string[]) => void;
     onjump: () => void;
+    oncomment: (body: string) => void;
   } = $props();
+
+  let commenting = $state(false);
+  let commentText = $state('');
+
+  function submitComment() {
+    if (commentText.trim()) oncomment(commentText);
+    commentText = '';
+    commenting = false;
+  }
 
   const TAGS = [
     'clarity',
@@ -103,17 +114,30 @@
     />
   </div>
 
+  {#if commenting}
+    <input
+      class="comment-text"
+      type="text"
+      placeholder="Comment on this change… (Enter to post)"
+      bind:value={commentText}
+      onkeydown={(e) => {
+        if (e.key === 'Enter') submitComment();
+        if (e.key === 'Escape') commenting = false;
+      }}
+    />
+  {/if}
+
   <footer>
     <button class="accept" onclick={onaccept} title="Accept (⌘⌥A)">Accept</button>
     <button class="reject" onclick={onreject} title="Reject (⌘⌥R)">Reject</button>
+    <button class="comment" onclick={() => (commenting = !commenting)} title="Discuss this change"
+      >💬</button
+    >
   </footer>
 </article>
 
 <style>
   .card {
-    position: absolute;
-    left: 8px;
-    right: 8px;
     background: var(--bg-elev);
     border: 1px solid var(--border);
     border-left: 3px solid var(--author-color);
@@ -198,9 +222,17 @@
     border-color: var(--author-color);
     color: #fff;
   }
-  .reason-text {
+  .reason-text,
+  .comment-text {
     width: 100%;
     font-size: 12px;
+  }
+  .comment-text {
+    margin-bottom: 6px;
+  }
+  .comment {
+    margin-left: auto;
+    padding: 2px 6px;
   }
   footer {
     display: flex;
