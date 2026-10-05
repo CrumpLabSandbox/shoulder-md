@@ -16,7 +16,7 @@ These were settled in the planning conversation on 2026-10-05.
 | Storage | Browser storage (IndexedDB) first; local folder on disk (File System Access API) as a later phase | Constant background save is a hard requirement. |
 | Claude as editor | Phase 2, after the manual editor works | Human author and human editor first. |
 | Change anchoring | Sentences with stable ids; changes record a character range within a sentence | Split and merge are explicit operations. |
-| Stack | Vite + TypeScript + CodeMirror 6 + Svelte 5 | Svelte chosen over React for a small, fast app with little boilerplate. Swappable for React before phase 1 ends if preferred. |
+| Stack | Vite + TypeScript + CodeMirror 6 + Svelte 5 | Svelte chosen over React for a small, fast app with little boilerplate. |
 | Typography | Bundled open-source fonts (serif, sans, mono) plus size, line height, text width, and light/dark/sepia themes | Everything works offline. |
 | Word import | Not in v1. Export only. | Import of plain .docx text, then of Word revisions, are later phases. |
 | Edit reasons | Optional, prompted lightly: pick-list plus free text, never blocking | Required reasons and Claude-written reasons are later options. |
@@ -411,14 +411,17 @@ Each phase ends with something usable. Phases 0 and 1 overlap in time.
 
 ---
 
-## 13. Open questions
+## 13. Decisions log
 
-Not blocking, but worth settling before the relevant phase.
+Settled on 2026-10-05, after the first draft of this plan:
 
-1. Svelte 5 is my pick. Confirm, or switch to React before phase 1 ends.
-2. Which of the bundled fonts to actually ship. Eight is a lot; four might do: Source Serif 4, Source Sans 3, JetBrains Mono, iA Writer Duo.
-3. Should "tracking off" edits still get `changeId`s and show in history as auto-accepted changes, or be invisible in the margin? I lean toward visible in history, hidden in the margin.
-4. Comment anchors across sentence boundaries: allow (anchor to a list of sentence ids) or clamp to one sentence. I lean toward allow.
-5. Default `libraryEligible`: off per document, with a per-library default you can flip.
-6. Name: keep `shoulder-md` (an editor looking over your shoulder) or rename when there is a UI.
-7. Phase 7 transport: browser API key, local proxy, or Claude Code via folder storage. Decide once phase 6 exists.
+1. UI framework: Svelte 5.
+2. Fonts: ship the full list in section 6.
+3. Edits made with tracking off get a `changeId` and appear in history as auto-accepted changes, but do not show in the margin.
+4. Comment anchors may span sentences: an anchor is a list of sentence ids with a range in the first and last.
+5. `libraryEligible` defaults to off per document, with a per-library default that can be flipped.
+6. Name stays `shoulder-md`.
+
+Still open:
+
+- Phase 7 transport: browser API key, local proxy, or Claude Code via folder storage. Decide once phase 6 exists.
