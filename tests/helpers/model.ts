@@ -18,6 +18,10 @@ export type Harness = {
   accept(...changeIds: string[]): Op;
   reject(...changeIds: string[]): Op;
   op(op: DistributiveOmit<Op, 'id' | 'ts' | 'author'> & { author?: string }): Op;
+  /** Inverse of the last applied op. */
+  readonly inverse: Op[];
+  /** Applies ops in order (e.g. an inverse) and returns the combined inverse of that application. */
+  applyOps(ops: Op[]): Op[];
   readonly state: State;
   rev(): string;
   clean(): string;
@@ -28,6 +32,7 @@ export type Harness = {
 
 export function harness(initial: string, opts: { tracking?: boolean } = {}): Harness {
   const idGen = sequentialIds('n');
+  let lastInverse: Op[] = [];
   let doc = createDocument({
     id: 'doc',
     text: initial,
@@ -47,6 +52,7 @@ export function harness(initial: string, opts: { tracking?: boolean } = {}): Har
 
   function push(d: Document, op: Op, gen: IdGen): Document {
     const applied = applyOp(d.state, op, { idGen: gen });
+    lastInverse = applied.inverse;
     return { ...d, ops: [...d.ops, applied.op], state: applied.state };
   }
 
@@ -88,6 +94,18 @@ export function harness(initial: string, opts: { tracking?: boolean } = {}): Har
       const op = { id: idGen(), ts: ts(), author: 'alice', ...partial } as Op;
       doc = push(doc, op, idGen);
       return doc.ops[doc.ops.length - 1]!;
+    },
+    get inverse() {
+      return lastInverse;
+    },
+    applyOps(ops) {
+      const inverses: Op[][] = [];
+      for (const op of ops) {
+        doc = push(doc, op, idGen);
+        inverses.push(lastInverse);
+      }
+      // Undoing a sequence applies each inverse in reverse order.
+      return inverses.reverse().flat();
     },
     rev: () => text(doc.state, 'revision'),
     clean: () => text(doc.state, 'clean'),

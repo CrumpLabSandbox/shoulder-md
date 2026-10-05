@@ -1,44 +1,60 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { createEditor, type EditorHandle, type Transaction } from '../editor/createEditor';
+  import { createEditor, type EditorBridge } from '../editor/createEditor';
+  import type { Workspace } from '../docs/workspace.svelte';
+  import { flatten, keptText, onlyPendingDeletions } from '../model/spans';
 
-  let {
-    docId,
-    text,
-    version = 0,
-    ontransaction,
-  }: {
-    docId: string | undefined;
-    text: string;
-    /** Bump to force the buffer to be replaced with `text` (resync after an external change). */
-    version?: number;
-    ontransaction: (tr: Transaction) => void;
-  } = $props();
+  let { ws, onscroll }: { ws: Workspace; onscroll?: () => void } = $props();
 
   let host: HTMLDivElement;
-  let editor: EditorHandle | undefined;
+  let bridge: EditorBridge | undefined;
   let loadedKey: string | undefined;
 
   onMount(() => {
-    editor = createEditor({ parent: host, doc: text, onTransaction: ontransaction });
-    loadedKey = `${docId}:${version}`;
-    editor.focus();
-    return () => editor?.destroy();
+    bridge = createEditor({
+      parent: host,
+      doc: ws.text,
+      onTransaction: (tr) => ws.applyTransaction(tr),
+      onSelection: (sel) => ws.setCursor(sel),
+      onUndo: () => ws.undo(),
+      onRedo: () => ws.redo(),
+      tracking: {
+        isTracking: () => ws.trackingOn,
+        keptText: (from, to) =>
+          ws.current ? keptText(flatten(ws.current.state.blocks), from, to, ws.author.id) : '',
+        onlyPendingDeletions: (from, to) =>
+          ws.current ? onlyPendingDeletions(flatten(ws.current.state.blocks), from, to) : false,
+      },
+    });
+    loadedKey = `${ws.current?.id}:${ws.version}`;
+    ws.attachEditor(bridge);
+    const off = onscroll ? bridge.onScroll(onscroll) : undefined;
+    bridge.focus();
+    return () => {
+      off?.();
+      ws.attachEditor(undefined);
+      bridge?.destroy();
+    };
   });
 
-  // When the open document (or the resync version) changes, replace the buffer and reset undo.
+  // When the open document (or the resync version) changes, replace the buffer.
   $effect(() => {
-    if (!editor) return;
-    const key = `${docId}:${version}`;
+    if (!bridge) return;
+    const key = `${ws.current?.id}:${ws.version}`;
     if (key !== loadedKey) {
-      editor.setText(text);
+      bridge.setText(ws.text, { readOnly: ws.view !== 'revision' });
       loadedKey = key;
-      editor.focus();
+      ws.attachEditor(bridge);
+      bridge.focus();
     }
   });
 
   export function focus() {
-    editor?.focus();
+    bridge?.focus();
+  }
+
+  export function measureTop(pos: number): number | undefined {
+    return bridge?.measureTop(pos);
   }
 </script>
 

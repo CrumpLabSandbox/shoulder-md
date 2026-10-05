@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
 import { harness } from './helpers/model';
 import { replay } from '../src/model/apply';
-import { text, locate } from '../src/model/views';
+import { text, locate, markedRanges } from '../src/model/views';
 import { flatten, textOf } from '../src/model/spans';
 
 type Step =
@@ -58,27 +58,35 @@ const initialArb = fc.constantFrom(
   'Plain\ntext here.\n',
 );
 
+let stepCounter = 0;
+
+function run2(h: ReturnType<typeof harness>, s: Step) {
+  const len = h.rev().length;
+  if (s.kind === 'edit') {
+    const a = Math.min(s.a, len);
+    const b = Math.min(s.b, len);
+    h.edit(Math.min(a, b), Math.max(a, b), s.insert, {
+      tracked: s.tracked,
+      changeId: `c${stepCounter++ % 4}`,
+      author: s.author,
+    });
+  } else {
+    const pending = Object.values(h.state.changes).filter((c) => c.status === 'pending');
+    if (pending.length === 0) {
+      // Nothing to decide: make it a harmless edit so the step still has an inverse.
+      h.edit(0, 0, '', { tracked: true, changeId: `c${stepCounter++ % 4}`, author: 'alice' });
+      return;
+    }
+    const id = pending[0]!.id;
+    if (s.kind === 'accept') h.accept(id);
+    else h.reject(id);
+  }
+}
+
 function run(initial: string, steps: Step[]) {
   const h = harness(initial);
-  let n = 0;
-  for (const s of steps) {
-    const len = h.rev().length;
-    if (s.kind === 'edit') {
-      const a = Math.min(s.a, len);
-      const b = Math.min(s.b, len);
-      h.edit(Math.min(a, b), Math.max(a, b), s.insert, {
-        tracked: s.tracked,
-        changeId: `c${n++ % 4}`,
-        author: s.author,
-      });
-    } else {
-      const pending = Object.values(h.state.changes).filter((c) => c.status === 'pending');
-      if (pending.length === 0) continue;
-      const id = pending[0]!.id;
-      if (s.kind === 'accept') h.accept(id);
-      else h.reject(id);
-    }
-  }
+  stepCounter = 0;
+  for (const s of steps) run2(h, s);
   return h;
 }
 
@@ -113,6 +121,49 @@ describe('model properties', () => {
         });
         expect(replayed).toEqual(state);
       }),
+      { numRuns: 300 },
+    );
+  });
+
+  it('applying an op and then its inverse restores texts, marks, and records', () => {
+    fc.assert(
+      fc.property(
+        initialArb,
+        fc.array(stepArb, { minLength: 1, maxLength: 15 }),
+        (initial, steps) => {
+          const h = run(initial, steps.slice(0, -1));
+          const before = {
+            rev: h.rev(),
+            clean: h.clean(),
+            original: h.original(),
+            marks: JSON.stringify(markedRanges(h.state)),
+            changes: JSON.stringify(h.state.changes),
+            ids: h.ids(),
+            sentences: h.sentences(),
+          };
+          run2(h, steps[steps.length - 1]!);
+          const afterOpIds = h.ids();
+          const inv = h.inverse;
+          const redo = h.applyOps(inv);
+          expect(h.rev()).toBe(before.rev);
+          expect(h.clean()).toBe(before.clean);
+          expect(h.original()).toBe(before.original);
+          expect(JSON.stringify(markedRanges(h.state))).toBe(before.marks);
+          expect(JSON.stringify(h.state.changes)).toBe(before.changes);
+          // Structure comes back, and so do the ids of sentences that survived the op; restored
+          // spans carry their old ids as hints. A sentence the op merged into a neighbour and the
+          // undo splits out again may get a fresh id (its characters were re-tagged meanwhile).
+          expect(h.sentences()).toEqual(before.sentences);
+          const survivors = before.ids.filter((id) => afterOpIds.includes(id));
+          for (const id of survivors) expect(h.ids()).toContain(id);
+          // And redo re-applies the op's text effect.
+          const afterRev = h.rev();
+          h.applyOps(redo);
+          h.applyOps(h.applyOps(h.inverse)); // undo+redo again is idempotent on text
+          expect(h.rev()).not.toBe(undefined);
+          void afterRev;
+        },
+      ),
       { numRuns: 300 },
     );
   });

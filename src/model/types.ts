@@ -132,6 +132,20 @@ export type Op = OpBase &
       } & StructuralOp)
     | ({ type: 'accept'; changeIds: string[] } & StructuralOp)
     | ({ type: 'reject'; changeIds: string[] } & StructuralOp)
+    | ({
+        /**
+         * Raw replacement of a revision range with the given spans, marks and all. The inverse
+         * of every text-affecting op is a splice; it is how undo and redo are expressed.
+         * Offsets are absolute in the revision text. Spans may carry sentence and block ids as
+         * hints so a restored sentence can reclaim its old id.
+         */
+        type: 'splice';
+        from: number;
+        to: number;
+        spans: (Span & { sentenceId?: string; blockId?: string })[];
+        /** Change records to restore afterwards; null deletes a record. */
+        records?: Record<string, ChangeRecord | null>;
+      } & StructuralOp)
     | { type: 'set_reason'; changeId: string; reason?: string; reasonTags?: string[] }
     | {
         type: 'comment_add';

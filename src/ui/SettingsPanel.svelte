@@ -2,7 +2,20 @@
   import { FONTS, ROLE_LABELS, type FontRole } from '../settings/fonts';
   import { PRESETS, type SettingsStore, type Theme } from '../settings/settings.svelte';
 
-  let { store, onclose }: { store: SettingsStore; onclose: () => void } = $props();
+  import { AUTHOR_PALETTE } from '../docs/identity';
+  import type { Author } from '../model/types';
+
+  let {
+    store,
+    author,
+    onauthor,
+    onclose,
+  }: {
+    store: SettingsStore;
+    author: Author;
+    onauthor: (a: Author) => void;
+    onclose: () => void;
+  } = $props();
   const s = $derived(store.value);
 
   const roles: FontRole[] = ['serif', 'sans', 'mono', 'duospace'];
@@ -133,6 +146,29 @@
     </div>
   </section>
 
+  <section>
+    <h3>Identity</h3>
+    <label>
+      <span>Your name (on changes and comments)</span>
+      <input
+        type="text"
+        value={author.name}
+        onchange={(e) => onauthor({ ...author, name: e.currentTarget.value.trim() || 'Me' })}
+      />
+    </label>
+    <div class="swatches" role="group" aria-label="Author colour">
+      {#each AUTHOR_PALETTE as c (c)}
+        <button
+          class="swatch"
+          class:on={author.color === c}
+          style:background={c}
+          aria-label="Colour {c}"
+          onclick={() => onauthor({ ...author, color: c })}
+        ></button>
+      {/each}
+    </div>
+  </section>
+
   <section class="foot">
     <button onclick={() => store.reset()}>Reset to defaults</button>
   </section>
@@ -212,6 +248,20 @@
   }
   .sample {
     line-height: 1.4;
+  }
+  .swatches {
+    display: flex;
+    gap: 6px;
+  }
+  .swatch {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    padding: 0;
+  }
+  .swatch.on {
+    border-color: var(--fg);
   }
   .foot {
     border-bottom: 0;

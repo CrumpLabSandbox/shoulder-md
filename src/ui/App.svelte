@@ -2,14 +2,16 @@
   import { onMount } from 'svelte';
   import { createSettingsStore, type Layout } from '../settings/settings.svelte';
   import { createWorkspace } from '../docs/workspace.svelte';
-  import { loadAuthor } from '../docs/identity';
+  import { loadAuthor, saveAuthor } from '../docs/identity';
   import { attachFlushTriggers } from '../persist/autosave';
   import { requestPersistence } from '../persist/idb';
+  import type { Author } from '../model/types';
   import Toolbar from './Toolbar.svelte';
   import Editor from './Editor.svelte';
   import Preview from './Preview.svelte';
   import SettingsPanel from './SettingsPanel.svelte';
   import DocumentList from './DocumentList.svelte';
+  import Margin from './Margin.svelte';
   import StatusBar from './StatusBar.svelte';
 
   const settings = createSettingsStore();
@@ -17,19 +19,54 @@
 
   let docsOpen = $state(false);
   let settingsOpen = $state(false);
+  let marginOpen = $state(true);
   let editor: Editor | undefined = $state();
+  let tick = $state(0);
 
   const layout = $derived(settings.value.layout);
+  const showMargin = $derived(marginOpen && layout !== 'preview' && ws.view === 'revision');
 
   function setLayout(l: Layout) {
     settings.set('layout', l);
     if (l !== 'preview') queueMicrotask(() => editor?.focus());
   }
 
+  function setAuthor(a: Author) {
+    ws.setAuthor(a);
+    saveAuthor(a);
+  }
+
+  // Re-measure margin cards whenever the text, the pending set, or the layout changes.
+  $effect(() => {
+    void ws.text;
+    void ws.pending;
+    void layout;
+    void showMargin;
+    requestAnimationFrame(() => tick++);
+  });
+
   function onKeydown(e: KeyboardEvent) {
     const mod = e.metaKey || e.ctrlKey;
     if (!mod) return;
     const key = e.key.toLowerCase();
+    const code = e.code; // Alt can change e.key on some layouts; use physical keys for ⌘⌥ chords.
+    if (e.altKey) {
+      const act: Record<string, () => void> = {
+        KeyT: () => ws.toggleTracking(),
+        KeyA: () => void ws.acceptActive(),
+        KeyR: () => void ws.rejectActive(),
+        KeyN: () => ws.nextChange(),
+        KeyP: () => ws.prevChange(),
+        KeyM: () => (marginOpen = !marginOpen),
+        KeyE: () => focusReason(),
+      };
+      const f = act[code];
+      if (f) {
+        e.preventDefault();
+        f();
+      }
+      return;
+    }
     if (key === 'e' && e.shiftKey) {
       e.preventDefault();
       setLayout(layout === 'split' ? 'editor' : 'split');
@@ -52,11 +89,28 @@
     }
   }
 
+  function focusReason() {
+    const id = ws.activeChangeId;
+    if (!id) return;
+    marginOpen = true;
+    requestAnimationFrame(() => {
+      const input = document.querySelector<HTMLInputElement>(
+        `.card[data-change="${id}"] .reason-text`,
+      );
+      input?.focus();
+    });
+  }
+
   onMount(() => {
     void ws.init();
     void requestPersistence();
     const detach = attachFlushTriggers(() => ws.flush());
-    return detach;
+    const onResize = () => tick++;
+    window.addEventListener('resize', onResize);
+    return () => {
+      detach();
+      window.removeEventListener('resize', onResize);
+    };
   });
 </script>
 
@@ -66,12 +120,29 @@
   <Toolbar
     title={ws.title}
     {layout}
+    view={ws.view}
+    trackingOn={ws.trackingOn}
+    pendingCount={ws.pending.length}
     {docsOpen}
+    marginOpen={showMargin}
     {settingsOpen}
+    canUndo={ws.canUndo}
+    canRedo={ws.canRedo}
     onrename={(t) => ws.rename(t)}
     onlayout={setLayout}
+    onview={(v) => ws.setView(v)}
+    ontoggletracking={() => ws.toggleTracking()}
     ontoggledocs={() => (docsOpen = !docsOpen)}
+    ontogglemargin={() => (marginOpen = !marginOpen)}
     ontogglesettings={() => (settingsOpen = !settingsOpen)}
+    onundo={() => {
+      ws.undo();
+      editor?.focus();
+    }}
+    onredo={() => {
+      ws.redo();
+      editor?.focus();
+    }}
   />
 
   <div class="body">
@@ -89,18 +160,12 @@
       {#if ws.ready}
         {#if layout !== 'preview'}
           <div class="pane">
-            <Editor
-              bind:this={editor}
-              docId={ws.current?.id}
-              text={ws.text}
-              version={ws.version}
-              ontransaction={(tr) => ws.applyTransaction(tr)}
-            />
+            <Editor bind:this={editor} {ws} onscroll={() => tick++} />
           </div>
         {/if}
         {#if layout !== 'editor'}
           <div class="pane preview-pane">
-            <Preview text={ws.text} />
+            <Preview text={ws.current ? ws.displayText : ''} />
           </div>
         {/if}
       {:else}
@@ -108,8 +173,17 @@
       {/if}
     </main>
 
+    {#if showMargin && ws.ready}
+      <Margin {ws} measure={(pos) => editor?.measureTop(pos)} {tick} />
+    {/if}
+
     {#if settingsOpen}
-      <SettingsPanel store={settings} onclose={() => (settingsOpen = false)} />
+      <SettingsPanel
+        store={settings}
+        author={ws.author}
+        onauthor={setAuthor}
+        onclose={() => (settingsOpen = false)}
+      />
     {/if}
   </div>
 

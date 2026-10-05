@@ -2,14 +2,25 @@
  * Applies ops to state. `applyOp` is deterministic given the op; fresh ids it needs are
  * recorded on the op (`alloc`) so a replay reproduces the same state, ids included.
  */
-import type { Alloc, CommentAnchor, CommentThread, Document, Effect, Op, State } from './types';
+import type {
+  Alloc,
+  ChangeRecord,
+  CommentAnchor,
+  CommentThread,
+  Document,
+  Effect,
+  Op,
+  State,
+} from './types';
 import { SCHEMA_VERSION } from './types';
 import { makeAllocator } from './reconcile';
 import { reconcile } from './reconcile';
 import {
   editSpansMapped,
   flatten,
+  rangeSpans,
   resolveSpans,
+  spliceSpans,
   textOf,
   type OffsetMap,
   type Tagged,
@@ -31,7 +42,33 @@ export function emptyState(): State {
   };
 }
 
-export type Applied = { state: State; op: Op };
+/**
+ * `inverse` undoes the op when applied in order to the resulting state. Present for every
+ * text-affecting op; empty for ops that need no undo (import) or are their own concern.
+ */
+export type Applied = { state: State; op: Op; inverse: Op[] };
+
+type SpliceOp = Extract<Op, { type: 'splice' }>;
+
+function inverseSplice(
+  base: { author: string; ts: string },
+  from: number,
+  to: number,
+  spans: Tagged[],
+  records?: Record<string, ChangeRecord | null>,
+): SpliceOp {
+  const op: SpliceOp = {
+    id: `${base.ts}:undo:${from}`,
+    type: 'splice',
+    author: base.author,
+    ts: base.ts,
+    from,
+    to,
+    spans,
+  };
+  if (records) op.records = records;
+  return op;
+}
 
 export function applyOp(state: State, op: Op, ctx: ApplyContext = {}): Applied {
   const idGen = ctx.idGen ?? ulid;
@@ -47,7 +84,7 @@ export function applyOp(state: State, op: Op, ctx: ApplyContext = {}): Applied {
         blocks,
         comments: state.comments.map((t) => ({ ...t, anchor: null })),
       };
-      return { state: next, op: withAlloc(op, alloc.used, effects) };
+      return { state: next, op: withAlloc(op, alloc.used, effects), inverse: [] };
     }
 
     case 'edit': {
@@ -63,9 +100,14 @@ export function applyOp(state: State, op: Op, ctx: ApplyContext = {}): Applied {
         tracked: op.tracked,
       });
       const anchors = captureAnchors(state);
+      const oldSpans = rangeSpans(flat, from, to);
+      const newLen = textOf(edit.spans).length - textOf(flat).length + (to - from);
       const { blocks, effects } = reconcile(edit.spans, alloc);
       const next: State = { ...state, blocks, changes: { ...state.changes } };
       const existing = next.changes[op.changeId];
+      const inverse = [
+        inverseSplice(op, from, from + newLen, oldSpans, { [op.changeId]: existing ?? null }),
+      ];
       if (op.tracked) {
         next.changes[op.changeId] = existing ?? {
           id: op.changeId,
@@ -86,7 +128,7 @@ export function applyOp(state: State, op: Op, ctx: ApplyContext = {}): Applied {
         };
       }
       next.comments = restoreAnchors(next, anchors, edit.map);
-      return { state: next, op: withAlloc(op, alloc.used, effects) };
+      return { state: next, op: withAlloc(op, alloc.used, effects), inverse };
     }
 
     case 'accept':
@@ -103,6 +145,43 @@ export function applyOp(state: State, op: Op, ctx: ApplyContext = {}): Applied {
         m.set(s.changeId, (m.get(s.changeId) ?? '') + s.text);
       }
       const anchors = captureAnchors(state);
+      // Inverse: restore each run of affected spans, later runs first so earlier offsets hold.
+      const runs: { newFrom: number; newLen: number; spans: Tagged[] }[] = [];
+      {
+        let newPos = 0;
+        let run: (typeof runs)[number] | undefined;
+        for (const s of flat) {
+          const affected = s.kind !== 'text' && !!s.changeId && ids.has(s.changeId);
+          const len = s.text.length;
+          if (affected) {
+            const vanish = op.type === 'accept' ? s.kind === 'del' : s.kind === 'ins';
+            if (!run) runs.push((run = { newFrom: newPos, newLen: 0, spans: [] }));
+            run.spans.push(s);
+            if (!vanish) {
+              run.newLen += len;
+              newPos += len;
+            }
+          } else {
+            run = undefined;
+            newPos += len;
+          }
+        }
+      }
+      const prevRecords: Record<string, ChangeRecord | null> = {};
+      for (const id of ids) prevRecords[id] = state.changes[id] ?? null;
+      const inverse: Op[] = runs
+        .slice()
+        .reverse()
+        .map((r, i, arr) =>
+          inverseSplice(
+            op,
+            r.newFrom,
+            r.newFrom + r.newLen,
+            r.spans,
+            i === arr.length - 1 ? prevRecords : undefined,
+          ),
+        );
+      if (runs.length === 0) inverse.push(inverseSplice(op, 0, 0, [], prevRecords));
       const resolved = resolveSpans(flat, ids, op.type);
       const { blocks, effects } = reconcile(resolved.spans, alloc);
       const next: State = { ...state, blocks, changes: { ...state.changes } };
@@ -119,7 +198,40 @@ export function applyOp(state: State, op: Op, ctx: ApplyContext = {}): Applied {
         };
       }
       next.comments = restoreAnchors(next, anchors, resolved.map);
-      return { state: next, op: withAlloc(op, alloc.used, effects) };
+      return { state: next, op: withAlloc(op, alloc.used, effects), inverse };
+    }
+
+    case 'splice': {
+      requireNonEmpty(state);
+      const alloc = makeAllocator(idGen, op.alloc);
+      const flat = flatten(state.blocks);
+      const total = textOf(flat).length;
+      if (op.from < 0 || op.to < op.from || op.to > total)
+        throw new ModelError('splice: range out of bounds');
+      const anchors = captureAnchors(state);
+      const spliced = spliceSpans(flat, op.from, op.to, op.spans);
+      const newLen = op.spans.reduce((n, r) => n + r.text.length, 0);
+      const { blocks, effects } = reconcile(spliced.spans, alloc);
+      const next: State = { ...state, blocks, changes: { ...state.changes } };
+      const prevRecords: Record<string, ChangeRecord | null> = {};
+      if (op.records) {
+        for (const [id, rec] of Object.entries(op.records)) {
+          prevRecords[id] = state.changes[id] ?? null;
+          if (rec === null) delete next.changes[id];
+          else next.changes[id] = rec;
+        }
+      }
+      next.comments = restoreAnchors(next, anchors, spliced.map);
+      const inverse = [
+        inverseSplice(
+          op,
+          op.from,
+          op.from + newLen,
+          spliced.removed,
+          op.records ? prevRecords : undefined,
+        ),
+      ];
+      return { state: next, op: withAlloc(op, alloc.used, effects), inverse };
     }
 
     case 'set_reason': {
@@ -130,7 +242,7 @@ export function applyOp(state: State, op: Op, ctx: ApplyContext = {}): Applied {
       else changes[op.changeId]!.reason = op.reason;
       if (op.reasonTags === undefined) delete changes[op.changeId]!.reasonTags;
       else changes[op.changeId]!.reasonTags = op.reasonTags;
-      return { state: { ...state, changes }, op };
+      return { state: { ...state, changes }, op, inverse: [] };
     }
 
     case 'comment_add': {
@@ -141,7 +253,7 @@ export function applyOp(state: State, op: Op, ctx: ApplyContext = {}): Applied {
         comments: [{ id: op.commentId, author: op.author, ts: op.ts, body: op.body }],
       };
       if (op.changeId) thread.changeId = op.changeId;
-      return { state: { ...state, comments: [...state.comments, thread] }, op };
+      return { state: { ...state, comments: [...state.comments, thread] }, op, inverse: [] };
     }
 
     case 'comment_reply':
@@ -154,6 +266,7 @@ export function applyOp(state: State, op: Op, ctx: ApplyContext = {}): Applied {
           ],
         })),
         op,
+        inverse: [],
       };
 
     case 'comment_edit':
@@ -163,23 +276,25 @@ export function applyOp(state: State, op: Op, ctx: ApplyContext = {}): Applied {
           comments: t.comments.map((c) => (c.id === op.commentId ? { ...c, body: op.body } : c)),
         })),
         op,
+        inverse: [],
       };
 
     case 'comment_resolve':
       return {
         state: updateThread(state, op.threadId, (t) => ({ ...t, resolved: op.resolved })),
         op,
+        inverse: [],
       };
 
     case 'set_tracking':
-      return { state: { ...state, trackingOn: op.on }, op };
+      return { state: { ...state, trackingOn: op.on }, op, inverse: [] };
 
     case 'set_meta':
-      return { state: { ...state, meta: { ...state.meta, ...op.patch } }, op };
+      return { state: { ...state, meta: { ...state.meta, ...op.patch } }, op, inverse: [] };
   }
 }
 
-type StructuralOp = Extract<Op, { type: 'import' | 'edit' | 'accept' | 'reject' }>;
+type StructuralOp = Extract<Op, { type: 'import' | 'edit' | 'accept' | 'reject' | 'splice' }>;
 
 function withAlloc(op: StructuralOp, alloc: Alloc, effects: Effect[]): Op {
   return { ...op, alloc, effects };
@@ -314,11 +429,16 @@ export function createDocument(opts: CreateOptions): Document {
 }
 
 /** Appends an op to a document, applying it. Returns the new document (immutable update). */
-export function appendOp(doc: Document, op: Op, ctx: ApplyContext = {}): { doc: Document; op: Op } {
+export function appendOp(
+  doc: Document,
+  op: Op,
+  ctx: ApplyContext = {},
+): { doc: Document; op: Op; inverse: Op[] } {
   const applied = applyOp(doc.state, op, ctx);
   return {
     doc: { ...doc, ops: [...doc.ops, applied.op], state: applied.state, updatedAt: op.ts },
     op: applied.op,
+    inverse: applied.inverse,
   };
 }
 

@@ -2,7 +2,7 @@
 
 A browser-based Markdown editor with Word-style tracked changes and comments, built on a structured JSON layer that records every edit and the reason for it. Exports to Markdown, Word, PDF, or the full JSON. Over time, a library of edited documents whose history can teach Claude to edit the way this writer edits.
 
-Status: phases 0 and 1 built (writing app with autosave, fonts, preview; sentence-level model and op log underneath). This document is the spec for v1 and the roadmap after it.
+Status: phases 0 to 2 built (writing app with autosave, fonts and preview; sentence-level model and op log; Word-style tracked changes with reasons, accept/reject, views, and model-level undo). This document is the spec for v1 and the roadmap after it.
 
 ---
 
@@ -186,6 +186,7 @@ Every op has `id`, `author`, and `ts`. Text-affecting ops also carry `alloc` (th
 | `edit` | changeId, from, to (positions: sentenceId + offset in that sentence's revision text), insert, tracked | The one text primitive. Tracked: plain text in the range becomes `del`, the author's own pending `ins` in the range vanishes outright (Word behavior), another author's `ins` becomes `del`, and the insertion becomes `ins`. Untracked: the range is removed and the insertion is plain text |
 | `accept` | changeIds | `ins` → text; `del` spans removed |
 | `reject` | changeIds | `ins` spans removed; `del` → text |
+| `splice` | from, to (absolute revision offsets), spans, records? | Raw replacement of a range with the given spans, marks included, then restore the given change records. The inverse of every other text op; how undo and redo are logged |
 | `set_reason` | changeId, reason, reasonTags | Attach or edit a reason |
 | `comment_add` | threadId, commentId, anchor, body, changeId? | Anchor: first-to-last sentence ids plus offsets in the first and last |
 | `comment_reply` | threadId, commentId, body | |
@@ -230,6 +231,10 @@ Consequences:
 
 - Backspacing onto a pending deletion skips it; backspacing onto someone else's insertion deletes it as a tracked deletion; backspacing onto your own insertion removes it outright.
 - Search, cursor movement, and selection work on the revision text. Preview and exports work on clean text via the offset maps.
+
+How it is built: a CodeMirror transaction filter rewrites user edits while tracking is on, so that text the model keeps as a pending deletion stays in the buffer (the rewritten change inserts the typed text followed by the kept text), and records the user's original change as an annotation that the adapter turns into `edit` ops. A deletion that would only cover pending deletions becomes a cursor move. Model-originated changes (accept, reject, undo, Claude's proposals later) are dispatched with a "from model" annotation that the filter and the adapter ignore.
+
+**Undo goes through the model**, not CodeMirror's history. Every text-affecting op returns its inverse as `splice` ops (a raw replacement of a revision range with given spans, marks included, plus the change records to restore). The workspace keeps undo and redo stacks of inverse ops with the selection before and after, groups keystrokes by change id within half a second, and mirrors each applied op into the buffer. Undoing a tracked deletion therefore restores the pending state rather than inserting text, and undoing an accept brings the marks and the pending record back. Restored spans carry their old sentence ids as hints, so a sentence an undo brings back usually reclaims its id; a sentence the op merged into a neighbour may come back with a fresh id, and comments follow by offset either way.
 
 ---
 
@@ -349,12 +354,13 @@ Each phase ends with something usable. Phases 0 and 1 overlap in time.
 - Persistence is the op log plus snapshots (section 5). Phase 0 raw-text documents migrate on first open via an `import` op.
 - Known gap for phase 2: undo is CodeMirror's buffer undo, which the model sees as a new edit. With tracking on, undoing a tracked deletion must restore the pending state rather than insert text; the adapter will handle undo through the model.
 
-### Phase 2: Track changes (1 to 2 weeks)
-- Tracking toggle, insertion and deletion decorations, atomic deletion ranges, keystroke coalescing.
-- Change cards in the margin, accept/reject (one, by author, all), next/previous change.
-- Markup, clean, and original views.
-- Reasons: pick-list plus free text, from the card and from a shortcut.
-- Done when: a full edit pass on a real paper with a second author identity reads correctly in all three views.
+### Phase 2: Track changes (built)
+- Tracking toggle (toolbar, ⌘⌥T), insertion and deletion decorations coloured by author, atomic deletion ranges, keystroke coalescing into one change.
+- Change cards in a margin aligned to their anchors (pushed apart when they would overlap): author, time, before → after, reason chips and free text, accept and reject. Accept/reject one, all, or by author; next/previous change (⌘⌥N, ⌘⌥P); accept/reject the change at the cursor (⌘⌥A, ⌘⌥R); focus its reason (⌘⌥E).
+- Markup, clean, and original views; clean and original are read-only.
+- Undo and redo through the model (see §4), with ⌘Z, ⌘⇧Z, ⌘Y and toolbar buttons.
+- Author name and colour in settings.
+- Still to do within this phase, before calling v1 done: the edit pass on a real paper with a second author identity, which needs comments (phase 3) to be a fair test; a per-author filter in the margin; keyboard navigation inside cards.
 
 ### Phase 3: Comments (1 week)
 - Select-and-comment, threads with replies, resolve/reopen, margin alignment, orphan handling.

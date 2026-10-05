@@ -272,3 +272,112 @@ export function resolveSpans<T extends Span & { sentenceId: string; blockId: str
   }
   return { spans: normalize(out), map: new OffsetMap(segments) };
 }
+
+/* ---------- raw splices (undo/redo) ---------- */
+
+export type HintedSpan = Span & { sentenceId?: string; blockId?: string };
+
+/** Copies of the spans inside [from, to), with their origin tags. */
+export function rangeSpans<T extends Span & { sentenceId: string; blockId: string }>(
+  spans: T[],
+  from: number,
+  to: number,
+): Tagged[] {
+  const seq = splitAt(splitAt(spans, from), to);
+  const out: Tagged[] = [];
+  let pos = 0;
+  for (const s of seq) {
+    const end = pos + s.text.length;
+    if (pos >= from && end <= to && s.text.length > 0) {
+      out.push({
+        kind: s.kind,
+        text: s.text,
+        ...(s.changeId !== undefined ? { changeId: s.changeId } : {}),
+        ...(s.author !== undefined ? { author: s.author } : {}),
+        sentenceId: s.sentenceId,
+        blockId: s.blockId,
+      });
+    }
+    pos = end;
+  }
+  return out;
+}
+
+/** Replaces [from, to) with `replacement` verbatim. Returns the removed spans and the map. */
+export function spliceSpans(
+  spans: Tagged[],
+  from: number,
+  to: number,
+  replacement: HintedSpan[],
+): { spans: Tagged[]; removed: Tagged[]; map: OffsetMap } {
+  const seq = splitAt(splitAt(spans, from), to);
+  const out: Tagged[] = [];
+  const removed: Tagged[] = [];
+  let pos = 0;
+  let inserted = false;
+  const insert = () => {
+    if (inserted) return;
+    inserted = true;
+    for (const r of replacement) {
+      if (r.text.length === 0) continue;
+      out.push({
+        kind: r.kind,
+        text: r.text,
+        ...(r.changeId !== undefined ? { changeId: r.changeId } : {}),
+        ...(r.author !== undefined ? { author: r.author } : {}),
+        sentenceId: r.sentenceId ?? '',
+        blockId: r.blockId ?? '',
+      });
+    }
+  };
+  for (const s of seq) {
+    const end = pos + s.text.length;
+    if (pos >= from && !inserted) insert();
+    if (pos >= from && end <= to && s.text.length > 0) removed.push(s);
+    else out.push(s);
+    pos = end;
+  }
+  if (!inserted) insert();
+  const total = textOf(spans).length;
+  const newLen = replacement.reduce((n, r) => n + r.text.length, 0);
+  const map = new OffsetMap([
+    { oldLen: from, newLen: from, identity: true },
+    { oldLen: to - from, newLen, identity: false },
+    { oldLen: total - to, newLen: total - to, identity: true },
+  ]);
+  return { spans: normalize(out), removed, map };
+}
+
+/**
+ * What a tracked deletion of [from, to) by `author` leaves in the buffer: pending deletions
+ * and other authors' insertions stay (struck through); the author's own insertions vanish.
+ */
+export function keptText(spans: readonly Span[], from: number, to: number, author: string): string {
+  let pos = 0;
+  let kept = '';
+  for (const s of spans) {
+    const end = pos + s.text.length;
+    const a = Math.max(from, pos);
+    const b = Math.min(to, end);
+    if (b > a) {
+      const own = s.kind === 'ins' && s.author === author;
+      if (!own) kept += s.text.slice(a - pos, b - pos);
+    }
+    pos = end;
+    if (pos >= to) break;
+  }
+  return kept;
+}
+
+/** True when [from, to) consists only of pending deletions (nothing new would be struck). */
+export function onlyPendingDeletions(spans: readonly Span[], from: number, to: number): boolean {
+  if (to <= from) return false;
+  let pos = 0;
+  for (const s of spans) {
+    const end = pos + s.text.length;
+    if (Math.min(to, end) > Math.max(from, pos) && s.kind !== 'del') return false;
+    pos = end;
+    if (pos >= to) break;
+  }
+  return true;
+}

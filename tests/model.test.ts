@@ -5,6 +5,7 @@ import { pendingChanges, shouldCoalesce } from '../src/model/changes';
 import { markedRanges, mapOffset } from '../src/model/views';
 import { OffsetMap } from '../src/model/spans';
 import { hashState } from '../src/model/hash';
+import { keptText } from '../src/model/spans';
 
 describe('import', () => {
   it('builds blocks and sentences that reproduce the text', () => {
@@ -314,5 +315,73 @@ describe('shouldCoalesce', () => {
     expect(shouldCoalesce(undefined, { author: 'a', from: 0, to: 0, at: 0, tracked: true })).toBe(
       false,
     );
+  });
+});
+
+describe('inverses (undo through the model)', () => {
+  it('undoes a tracked replacement exactly, marks and record included', () => {
+    const h = harness('Keep this and remove that.');
+    const before = h.state;
+    h.edit(14, 25, 'add this', { changeId: 'c1' });
+    const inv = h.inverse;
+    expect(inv).toHaveLength(1);
+    expect(inv[0]!.type).toBe('splice');
+    const redo = h.applyOps(inv);
+    expect(h.rev()).toBe('Keep this and remove that.');
+    expect(markedRanges(h.state)).toEqual([]);
+    expect(h.state.changes['c1']).toBeUndefined();
+    expect(h.ids()).toEqual(before.blocks.flatMap((b) => b.sentences.map((s) => s.id)));
+    // Redo brings the change back.
+    h.applyOps(redo);
+    expect(h.rev()).toBe('Keep this and add thisremove that.');
+    expect(h.state.changes['c1']!.status).toBe('pending');
+    expect(pendingChanges(h.state)[0]).toMatchObject({ before: 'remove that', after: 'add this' });
+  });
+
+  it('undoes an accept of several scattered changes', () => {
+    const h = harness('One two three four five.');
+    h.edit(4, 7, 'TWO', { changeId: 'c1' });
+    h.edit(h.rev().indexOf('four'), h.rev().indexOf('four') + 4, 'FOUR', { changeId: 'c2' });
+    const revBefore = h.rev();
+    const marksBefore = markedRanges(h.state);
+    h.accept('c1', 'c2');
+    expect(h.rev()).toBe('One TWO three FOUR five.');
+    expect(h.inverse.length).toBe(2);
+    h.applyOps(h.inverse);
+    expect(h.rev()).toBe(revBefore);
+    expect(markedRanges(h.state)).toEqual(marksBefore);
+    expect(h.state.changes['c1']!.status).toBe('pending');
+    expect(h.state.changes['c2']!.status).toBe('pending');
+  });
+
+  it('restores the old sentence id when an undo brings a sentence back', () => {
+    const h = harness('First one. Second one.', { tracking: false });
+    const [a, b] = h.ids();
+    h.edit(11, 22, ''); // delete the second sentence
+    expect(h.ids()).toEqual([a]);
+    h.applyOps(h.inverse);
+    expect(h.sentences()).toEqual(['First one. ', 'Second one.']);
+    expect(h.ids()).toEqual([a, b]);
+  });
+
+  it('a splice is bounds-checked', () => {
+    const h = harness('abc');
+    expect(() => h.op({ type: 'splice', from: 2, to: 9, spans: [] })).toThrow();
+  });
+});
+
+describe('keptText', () => {
+  it("keeps pending deletions and other authors' insertions, drops own insertions", () => {
+    const spans = [
+      { kind: 'text' as const, text: 'ab' },
+      { kind: 'ins' as const, text: 'XY', author: 'alice', changeId: 'c' },
+      { kind: 'del' as const, text: 'cd', author: 'bob', changeId: 'd' },
+      { kind: 'ins' as const, text: 'Z', author: 'bob', changeId: 'e' },
+      { kind: 'text' as const, text: 'ef' },
+    ];
+    expect(keptText(spans, 0, 9, 'alice')).toBe('abcdZef');
+    expect(keptText(spans, 1, 5, 'alice')).toBe('bc');
+    expect(keptText(spans, 2, 4, 'alice')).toBe('');
+    expect(keptText(spans, 2, 4, 'bob')).toBe('XY');
   });
 });
