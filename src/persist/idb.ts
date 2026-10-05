@@ -13,6 +13,7 @@ import type { Document, Op, State } from '../model/types';
 import { SCHEMA_VERSION } from '../model/types';
 import { applyOp, createDocument, replay } from '../model/apply';
 import { hashState } from '../model/hash';
+import { ulid } from '../model/ids';
 import { text as viewText } from '../model/views';
 import { countWords } from '../util/text';
 import { displayTitle } from '../docs/title';
@@ -127,6 +128,20 @@ export async function createDoc(init: {
     await tx.objectStore('ops').put({ docId: doc.id, seq: i, op: doc.ops[i]! });
   await tx.done;
   return doc;
+}
+
+/** Stores an existing document (an import). A clashing id gets a fresh one. */
+export async function importDocument(doc: Document): Promise<Document> {
+  const d = await db();
+  const exists = await d.get('docs', doc.id);
+  const stored: Document = exists ? { ...doc, id: ulid() } : doc;
+  const tx = d.transaction(['docs', 'ops'], 'readwrite');
+  await tx.objectStore('docs').put(headerOf(stored, stored.ops.length, stored.updatedAt));
+  for (let i = 0; i < stored.ops.length; i++) {
+    await tx.objectStore('ops').put({ docId: stored.id, seq: i, op: stored.ops[i]! });
+  }
+  await tx.done;
+  return stored;
 }
 
 export type Loaded = { doc: Document; recovered: boolean };

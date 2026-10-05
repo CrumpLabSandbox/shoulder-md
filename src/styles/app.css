@@ -260,16 +260,52 @@ kbd {
   margin-right: 0.4em;
 }
 
+/* Print: the app hides and the print root (filled by export/print.ts) shows. */
+#print-root {
+  display: none;
+}
+.md-preview ins {
+  text-decoration: underline;
+  color: #1d4ed8;
+}
+.md-preview del {
+  text-decoration: line-through;
+  color: #b91c1c;
+}
+.md-preview sup.fn {
+  font-size: 0.7em;
+  color: #b45309;
+  font-weight: 600;
+  margin-left: 1px;
+}
+.md-preview .footnotes {
+  margin-top: 2em;
+  padding-top: 1em;
+  border-top: 1px solid var(--border);
+  font-size: 0.9em;
+}
+.md-preview .footnotes h2 {
+  font-size: 1em;
+  margin: 0 0 0.5em;
+}
+
 @media print {
   body {
     background: #fff;
     color: #000;
   }
+  body.printing > :not(#print-root),
   .no-print {
     display: none !important;
+  }
+  #print-root {
+    display: block;
   }
   .md-preview {
     max-width: none;
     padding: 0;
+  }
+  @page {
+    margin: 2cm;
   }
 }

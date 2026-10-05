@@ -2,10 +2,15 @@ import {
   appendOps,
   createDoc,
   deleteDoc,
+  importDocument,
   listDocs,
   loadDoc,
   type DocSummary,
 } from '../persist/idb';
+import { exportCriticMarkup, exportMarkdown, documentFromCriticMarkup } from '../export/markdown';
+import { exportJson, importJson } from '../export/json';
+import { downloadBlob, downloadText, slugify } from '../export/download';
+import { printDocument, printHtml } from '../export/print';
 import { createAutosave, type SaveStatus } from '../persist/autosave';
 import { displayTitle } from './title';
 import { authorColor } from './identity';
@@ -562,6 +567,82 @@ export function createWorkspace(initialAuthor: Author) {
     bridge.focus();
   }
 
+  /* ---------- export and import ---------- */
+
+  type ExportKind =
+    'md-clean' | 'md-original' | 'md-critic' | 'json' | 'docx' | 'print-clean' | 'print-markup';
+
+  async function exportAs(kind: ExportKind): Promise<void> {
+    if (!current) return;
+    await autosave.flush();
+    const doc = current;
+    const title = displayTitle(doc.state.meta.title, viewText(doc.state, 'clean'));
+    const stem = slugify(title);
+    switch (kind) {
+      case 'md-clean':
+        return downloadText(
+          `${stem}.md`,
+          exportMarkdown(doc.state, 'clean'),
+          'text/markdown;charset=utf-8',
+        );
+      case 'md-original':
+        return downloadText(
+          `${stem}.original.md`,
+          exportMarkdown(doc.state, 'original'),
+          'text/markdown;charset=utf-8',
+        );
+      case 'md-critic':
+        return downloadText(
+          `${stem}.changes.md`,
+          exportCriticMarkup(doc.state, { authors }),
+          'text/markdown;charset=utf-8',
+        );
+      case 'json':
+        return downloadText(`${stem}.shoulder.json`, exportJson(doc), 'application/json');
+      case 'docx': {
+        const { exportDocx } = await import('../export/docx');
+        const blob = await exportDocx(doc, { authors, creator: author.name });
+        return downloadBlob(`${stem}.docx`, blob);
+      }
+      case 'print-clean':
+        return printDocument(printHtml(doc.state, 'clean', authors), title);
+      case 'print-markup':
+        return printDocument(printHtml(doc.state, 'markup', authors), title);
+    }
+  }
+
+  let importNotice = $state<string | undefined>(undefined);
+
+  /** Imports a .md (plain or CriticMarkup) or .shoulder.json file as a new document and opens it. */
+  async function importFile(file: File): Promise<void> {
+    const text = await file.text();
+    const stem = file.name.replace(/\.(shoulder\.json|json|md|markdown|txt)$/i, '');
+    let doc;
+    try {
+      if (/\.json$/i.test(file.name)) {
+        const r = importJson(text);
+        doc = r.doc;
+        importNotice = r.repaired
+          ? 'Imported; the stored state did not match the op log and was rebuilt from the log.'
+          : undefined;
+      } else {
+        const hasMarkup = /\{(\+\+|--|~~|==|>>)/.test(text);
+        doc = documentFromCriticMarkup(text, {
+          author: author.id,
+          tracking: hasMarkup,
+          title: stem,
+        });
+        importNotice = undefined;
+      }
+    } catch (e) {
+      importNotice = `Import failed: ${e instanceof Error ? e.message : String(e)}`;
+      return;
+    }
+    const stored = await importDocument(doc);
+    await refreshList();
+    await open(stored.id);
+  }
+
   function jumpTo(changeId: string) {
     const c = pending.find((x) => x.id === changeId);
     if (!c || !bridge) return;
@@ -674,6 +755,12 @@ export function createWorkspace(initialAuthor: Author) {
       showResolved = v;
       pushMarks();
     },
+    get importNotice() {
+      return importNotice;
+    },
+    clearImportNotice: () => (importNotice = undefined),
+    exportAs,
+    importFile,
     startComment,
     cancelComment,
     addComment,

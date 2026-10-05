@@ -1,0 +1,202 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://shoulder-md.dev/schema/document-v1.json",
+  "title": "shoulder-md document",
+  "type": "object",
+  "required": ["schemaVersion", "id", "createdAt", "updatedAt", "authors", "ops", "state"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string" },
+    "updatedAt": { "type": "string" },
+    "authors": { "type": "array", "items": { "$ref": "#/definitions/author" } },
+    "ops": { "type": "array", "items": { "$ref": "#/definitions/op" } },
+    "state": { "$ref": "#/definitions/state" }
+  },
+  "definitions": {
+    "author": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "color": { "type": "string" }
+      }
+    },
+    "pos": {
+      "type": "object",
+      "required": ["sentenceId", "offset"],
+      "properties": {
+        "sentenceId": { "type": "string" },
+        "offset": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "span": {
+      "type": "object",
+      "required": ["kind", "text"],
+      "properties": {
+        "kind": { "enum": ["text", "ins", "del"] },
+        "text": { "type": "string" },
+        "changeId": { "type": "string" },
+        "author": { "type": "string" },
+        "sentenceId": { "type": "string" },
+        "blockId": { "type": "string" }
+      }
+    },
+    "sentence": {
+      "type": "object",
+      "required": ["id", "spans"],
+      "properties": {
+        "id": { "type": "string" },
+        "spans": { "type": "array", "items": { "$ref": "#/definitions/span" } }
+      }
+    },
+    "block": {
+      "type": "object",
+      "required": ["id", "kind", "attrs", "sentences"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": {
+          "enum": [
+            "paragraph",
+            "heading",
+            "list_item",
+            "code",
+            "thematic_break",
+            "table",
+            "html",
+            "other"
+          ]
+        },
+        "attrs": { "type": "object" },
+        "sentences": { "type": "array", "items": { "$ref": "#/definitions/sentence" } }
+      }
+    },
+    "changeRecord": {
+      "type": "object",
+      "required": ["id", "author", "ts", "tracked", "status"],
+      "properties": {
+        "id": { "type": "string" },
+        "author": { "type": "string" },
+        "ts": { "type": "string" },
+        "tracked": { "type": "boolean" },
+        "status": { "enum": ["pending", "accepted", "rejected"] },
+        "reason": { "type": "string" },
+        "reasonTags": { "type": "array", "items": { "type": "string" } },
+        "decidedBy": { "type": "string" },
+        "decidedAt": { "type": "string" },
+        "before": { "type": "string" },
+        "after": { "type": "string" }
+      }
+    },
+    "anchor": {
+      "type": "object",
+      "required": ["sentenceIds", "from", "to"],
+      "properties": {
+        "sentenceIds": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "from": { "type": "integer", "minimum": 0 },
+        "to": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "comment": {
+      "type": "object",
+      "required": ["id", "author", "ts", "body"],
+      "properties": {
+        "id": { "type": "string" },
+        "author": { "type": "string" },
+        "ts": { "type": "string" },
+        "body": { "type": "string" }
+      }
+    },
+    "thread": {
+      "type": "object",
+      "required": ["id", "anchor", "resolved", "comments"],
+      "properties": {
+        "id": { "type": "string" },
+        "anchor": { "oneOf": [{ "$ref": "#/definitions/anchor" }, { "type": "null" }] },
+        "blockId": { "type": "string" },
+        "orphanedFrom": { "$ref": "#/definitions/anchor" },
+        "changeId": { "type": "string" },
+        "resolved": { "type": "boolean" },
+        "comments": { "type": "array", "items": { "$ref": "#/definitions/comment" } }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "required": ["title", "tags", "status", "libraryEligible"],
+      "properties": {
+        "title": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "status": { "enum": ["draft", "in-review", "final"] },
+        "libraryEligible": { "type": "boolean" }
+      }
+    },
+    "state": {
+      "type": "object",
+      "required": ["blocks", "changes", "comments", "trackingOn", "meta"],
+      "properties": {
+        "blocks": { "type": "array", "items": { "$ref": "#/definitions/block" } },
+        "changes": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/changeRecord" }
+        },
+        "comments": { "type": "array", "items": { "$ref": "#/definitions/thread" } },
+        "trackingOn": { "type": "boolean" },
+        "meta": { "$ref": "#/definitions/meta" }
+      }
+    },
+    "alloc": {
+      "type": "object",
+      "properties": {
+        "sentenceIds": { "type": "array", "items": { "type": "string" } },
+        "blockIds": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "op": {
+      "type": "object",
+      "required": ["id", "author", "ts", "type"],
+      "properties": {
+        "id": { "type": "string" },
+        "author": { "type": "string" },
+        "ts": { "type": "string" },
+        "type": {
+          "enum": [
+            "import",
+            "edit",
+            "accept",
+            "reject",
+            "splice",
+            "set_reason",
+            "comment_add",
+            "comment_reply",
+            "comment_edit",
+            "comment_resolve",
+            "set_tracking",
+            "set_meta"
+          ]
+        },
+        "alloc": { "$ref": "#/definitions/alloc" },
+        "effects": { "type": "array" },
+        "text": { "type": "string" },
+        "changeId": { "type": "string" },
+        "changeIds": { "type": "array", "items": { "type": "string" } },
+        "from": { "oneOf": [{ "$ref": "#/definitions/pos" }, { "type": "integer" }] },
+        "to": { "oneOf": [{ "$ref": "#/definitions/pos" }, { "type": "integer" }] },
+        "insert": { "type": "string" },
+        "tracked": { "type": "boolean" },
+        "spans": { "type": "array", "items": { "$ref": "#/definitions/span" } },
+        "records": { "type": "object" },
+        "reason": { "type": "string" },
+        "reasonTags": { "type": "array", "items": { "type": "string" } },
+        "threadId": { "type": "string" },
+        "commentId": { "type": "string" },
+        "anchor": { "$ref": "#/definitions/anchor" },
+        "body": { "type": "string" },
+        "resolved": { "type": "boolean" },
+        "on": { "type": "boolean" },
+        "patch": { "type": "object" }
+      }
+    }
+  }
+}

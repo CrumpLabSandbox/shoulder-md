@@ -153,6 +153,7 @@
       ws.redo();
       editor?.focus();
     }}
+    onexport={(kind) => void ws.exportAs(kind)}
   />
 
   <div class="body">
@@ -163,6 +164,7 @@
         onopen={(id) => void ws.open(id)}
         oncreate={() => void ws.create()}
         ondelete={(id) => void ws.remove(id)}
+        onimport={(f) => void ws.importFile(f)}
       />
     {/if}
 
@@ -196,6 +198,13 @@
       />
     {/if}
   </div>
+
+  {#if ws.importNotice}
+    <div class="notice" role="status">
+      <span>{ws.importNotice}</span>
+      <button onclick={() => ws.clearImportNotice()} aria-label="Dismiss">×</button>
+    </div>
+  {/if}
 
   <StatusBar
     text={ws.text}
@@ -233,5 +242,14 @@
   .loading {
     margin: auto;
     color: var(--fg-muted);
+  }
+  .notice {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 12px;
+    font-size: 12px;
+    background: color-mix(in srgb, #eab308 20%, var(--bg-elev));
+    border-top: 1px solid var(--border);
   }
 </style>

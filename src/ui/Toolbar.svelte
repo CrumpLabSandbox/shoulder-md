@@ -23,6 +23,7 @@
     ontogglesettings,
     onundo,
     onredo,
+    onexport,
   }: {
     title: string;
     layout: Layout;
@@ -44,7 +45,29 @@
     ontogglesettings: () => void;
     onundo: () => void;
     onredo: () => void;
+    onexport: (kind: ExportKind) => void;
   } = $props();
+
+  type ExportKind =
+    'md-clean' | 'md-original' | 'md-critic' | 'json' | 'docx' | 'print-clean' | 'print-markup';
+  let exportOpen = $state(false);
+  const exports: { kind: ExportKind; label: string; hint: string }[] = [
+    { kind: 'md-clean', label: 'Markdown (clean)', hint: 'All changes accepted' },
+    { kind: 'md-original', label: 'Markdown (original)', hint: 'All changes rejected' },
+    {
+      kind: 'md-critic',
+      label: 'Markdown with changes',
+      hint: 'CriticMarkup: changes and comments marked up',
+    },
+    { kind: 'docx', label: 'Word (.docx)', hint: 'Real tracked changes and comments' },
+    { kind: 'json', label: 'JSON (full history)', hint: 'Everything, including the op log' },
+    { kind: 'print-clean', label: 'Print / PDF (clean)', hint: 'Browser print dialog' },
+    {
+      kind: 'print-markup',
+      label: 'Print / PDF (with changes)',
+      hint: 'Changes inline, comments as footnotes',
+    },
+  ];
 
   const layouts: { id: Layout; label: string; hint: string }[] = [
     { id: 'editor', label: 'Write', hint: 'Editor only' },
@@ -115,6 +138,29 @@
           >{l.label}</button
         >
       {/each}
+    </div>
+    <div class="menu">
+      <button
+        class:active={exportOpen}
+        onclick={() => (exportOpen = !exportOpen)}
+        title="Export"
+        aria-label="Export"
+      >
+        Export ▾
+      </button>
+      {#if exportOpen}
+        <div class="dropdown" role="menu">
+          {#each exports as e (e.kind)}
+            <button
+              title={e.hint}
+              onclick={() => {
+                exportOpen = false;
+                onexport(e.kind);
+              }}>{e.label}</button
+            >
+          {/each}
+        </div>
+      {/if}
     </div>
     <button
       class:active={settingsOpen}
@@ -196,6 +242,27 @@
   .track.on .led {
     background: #16a34a;
     box-shadow: 0 0 0 3px color-mix(in srgb, #16a34a 25%, transparent);
+  }
+  .menu {
+    position: relative;
+  }
+  .dropdown {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    z-index: 6;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    min-width: 220px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  }
+  .dropdown button {
+    text-align: left;
+    white-space: nowrap;
   }
   .badge {
     margin-left: 5px;

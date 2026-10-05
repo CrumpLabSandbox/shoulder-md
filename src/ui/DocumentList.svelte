@@ -7,13 +7,17 @@
     onopen,
     oncreate,
     ondelete,
+    onimport,
   }: {
     docs: DocSummary[];
     currentId: string | undefined;
     onopen: (id: string) => void;
     oncreate: () => void;
     ondelete: (id: string) => void;
+    onimport: (file: File) => void;
   } = $props();
+
+  let fileInput: HTMLInputElement;
 
   function when(iso: string) {
     const d = new Date(iso);
@@ -32,7 +36,24 @@
 <aside class="docs no-print" aria-label="Documents">
   <div class="head">
     <span>Documents</span>
-    <button class="primary" onclick={oncreate} title="New document (⌘N)">+ New</button>
+    <span class="actions">
+      <button
+        onclick={() => fileInput.click()}
+        title="Import a Markdown, CriticMarkup, or .shoulder.json file">Import…</button
+      >
+      <button class="primary" onclick={oncreate} title="New document (⌘N)">+ New</button>
+    </span>
+    <input
+      bind:this={fileInput}
+      type="file"
+      accept=".md,.markdown,.txt,.json"
+      hidden
+      onchange={(e) => {
+        const f = e.currentTarget.files?.[0];
+        if (f) onimport(f);
+        e.currentTarget.value = '';
+      }}
+    />
   </div>
   <ul>
     {#each docs as doc (doc.id)}
@@ -63,6 +84,10 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+  }
+  .actions {
+    display: flex;
+    gap: 4px;
   }
   .head {
     display: flex;

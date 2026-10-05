@@ -2,7 +2,7 @@
 
 A browser-based Markdown editor with Word-style tracked changes and comments, built on a structured JSON layer that records every edit and the reason for it. Exports to Markdown, Word, PDF, or the full JSON. Over time, a library of edited documents whose history can teach Claude to edit the way this writer edits.
 
-Status: phases 0 to 3 built (writing app with autosave, fonts and preview; sentence-level model and op log; Word-style tracked changes with reasons, accept/reject, views, and model-level undo; comment threads in the same margin). This document is the spec for v1 and the roadmap after it.
+Status: phases 0 to 4 built (writing app with autosave, fonts and preview; sentence-level model and op log; Word-style tracked changes with reasons, accept/reject, views, and model-level undo; comment threads in the same margin; exports to Markdown, CriticMarkup, Word, JSON and PDF, with CriticMarkup and JSON import). This document is the spec for v1 and the roadmap after it.
 
 ---
 
@@ -287,9 +287,9 @@ Later: allow any installed font by name, and list local fonts via the Local Font
 | Markdown, clean | All pending changes accepted | Serialize clean text |
 | Markdown, original | All pending changes rejected | Serialize original text |
 | Markdown with changes | [CriticMarkup](http://criticmarkup.com/) `{++ins++}`, `{--del--}`, `{>>comment<<}`, `{==highlight==}` | Serialize revision spans; comments as `{>>…<<}` after the anchored range. Round-trips back into the model (import of CriticMarkup is cheap and useful for Claude Code workflows) |
-| JSON | The full `Document`, validated against `schema.json` | `JSON.stringify` with a stable key order |
+| JSON | The full `Document`; `src/export/schema.json` describes it and the test suite validates exports against it | On import, the op log is replayed and must reproduce the stored state |
 | Word (.docx) | Real tracked changes and comments | The `docx` npm package: `InsertedTextRun`, `DeletedTextRun`, `CommentRangeStart/End`, `CommentReference`, author and date per revision. Markdown block kinds map to Word styles (Heading 1–6, List Paragraph, Quote, code in a monospace style) |
-| PDF | Clean or markup view | Print stylesheet and `window.print()` in v1. Margin comments render as footnotes in print |
+| PDF | Clean or markup view | A print-only root in the page plus `window.print()`; insertions and deletions styled inline, comments as footnotes |
 | Library export | JSONL of change records for training | See section 8 |
 
 Export of the current document is a single menu. Export of the whole library is from the library view.
@@ -368,10 +368,11 @@ Each phase ends with something usable. Phases 0 and 1 overlap in time.
 - Anchors ride through edits, accept, reject, undo and redo via the offset map. A thread whose text is entirely gone becomes orphaned: its card says so and sits at its block's start; undo brings the anchor back.
 - Done: comments survive heavy editing around them (property-tested at the model level, exercised in the browser).
 
-### Phase 4: Exports (1 week)
-- Markdown clean/original/CriticMarkup, JSON with schema validation, DOCX with real revisions and comments, PDF via print.
-- CriticMarkup import.
-- Done when: a .docx opened in Word shows the same changes and comments as the editor.
+### Phase 4: Exports (built)
+- Export menu in the toolbar: Markdown clean, Markdown original, Markdown with changes (CriticMarkup, with `{~~old~>new~~}` substitutions and `{==text==}{>>author: comment<<}` threads), Word (.docx, lazy-loaded), JSON (the full document with its op log), and Print / PDF clean or with changes (insertions and deletions inline, comments as footnotes) through the browser's print dialog.
+- Word export writes real `w:ins` and `w:del` revisions attributed to their author and time, threaded comments (replies via parent ids, resolved state), headings, bullet and numbered lists that restart per list, Quote and Code styles, tables, rules, and bold, italic, code, strikethrough and links from inline Markdown with the markers dropped.
+- Import from the document list: a Markdown or CriticMarkup file becomes a new document (markup becomes pending changes and threads via one `splice` op, so the log stays replayable); a `.shoulder.json` export is checked by replaying its op log and the replayed state wins over the stored one.
+- Verified in Node by unzipping the generated .docx and checking the XML, and in the browser by downloading each format and re-importing the CriticMarkup and JSON exports. Still to check by hand: opening the .docx in Word and LibreOffice.
 
 ### Phase 5: Library (1 week)
 - Library view, tags, status, search, `libraryEligible`, JSONL change-record export.
