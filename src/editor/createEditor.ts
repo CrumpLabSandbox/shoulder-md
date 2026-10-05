@@ -25,10 +25,20 @@ export type EditorHandle = {
   destroy(): void;
 };
 
+/** One replaced range, in the coordinates of the document before the transaction. */
+export type TextChange = { from: number; to: number; insert: string };
+
+export type Transaction = {
+  /** Non-overlapping, in ascending order of `from`. */
+  changes: TextChange[];
+  /** The full text after the transaction. */
+  text: string;
+};
+
 export type EditorOptions = {
   parent: HTMLElement;
   doc: string;
-  onChange: (text: string) => void;
+  onTransaction: (tr: Transaction) => void;
   placeholder?: string;
   extraExtensions?: Extension[];
 };
@@ -58,7 +68,12 @@ function baseExtensions(opts: EditorOptions): Extension[] {
     editorHighlighting,
     placeholderExt(opts.placeholder ?? 'Start writing…'),
     EditorView.updateListener.of((update) => {
-      if (update.docChanged) opts.onChange(update.state.doc.toString());
+      if (!update.docChanged) return;
+      const changes: TextChange[] = [];
+      update.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+        changes.push({ from: fromA, to: toA, insert: inserted.toString() });
+      });
+      opts.onTransaction({ changes, text: update.state.doc.toString() });
     }),
     ...(opts.extraExtensions ?? []),
   ];

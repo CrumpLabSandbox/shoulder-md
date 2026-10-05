@@ -10,11 +10,7 @@ export function deriveTitle(text: string): string {
   return 'Untitled';
 }
 
-/**
- * Decides the title after a text change. The title follows the text while it was never set by hand:
- * that is, while it still equals what the previous text would have produced.
- */
-export function nextTitle(currentTitle: string, previousText: string, newText: string): string {
-  const wasDerived = currentTitle === deriveTitle(previousText) || currentTitle === 'Untitled';
-  return wasDerived ? deriveTitle(newText) : currentTitle;
+/** The title to show: an explicit one if set, else derived from the text. */
+export function displayTitle(explicit: string, text: string): string {
+  return explicit.trim() || deriveTitle(text);
 }

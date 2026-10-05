@@ -82,3 +82,30 @@ describe('attachFlushTriggers', () => {
     expect(flush).toHaveBeenCalledTimes(4);
   });
 });
+
+describe('createAutosave with merge', () => {
+  it('accumulates scheduled values into one write', async () => {
+    const save = vi.fn(async (_batch: number[]) => void _batch);
+    const a = createAutosave<number[]>({ save, delayMs: 10_000, merge: (p, n) => [...p, ...n] });
+    a.schedule([1]);
+    a.schedule([2, 3]);
+    await a.flush();
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith([1, 2, 3]);
+  });
+
+  it('keeps order across a failed write and a retry', async () => {
+    let fail = true;
+    const save = vi.fn(async (_batch: number[]) => {
+      void _batch;
+      if (fail) throw new Error('nope');
+    });
+    const a = createAutosave<number[]>({ save, delayMs: 10_000, merge: (p, n) => [...p, ...n] });
+    a.schedule([1]);
+    await a.flush();
+    a.schedule([2]);
+    fail = false;
+    await a.flush();
+    expect(save).toHaveBeenLastCalledWith([1, 2]);
+  });
+});

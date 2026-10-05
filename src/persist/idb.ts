@@ -1,42 +1,92 @@
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import { countWords } from '../util/text';
-
 /**
- * Phase 0 persistence: raw Markdown text per document.
- * Phase 1 replaces the `text` field with an op log and snapshots (see plan.md §5),
- * so this schema is version 1 and will be migrated, never rewritten in place.
+ * Persistence: the op log is the source of truth, with a snapshot per document for fast loads.
+ *
+ * Stores:
+ *   docs  — one header per document: listing metadata plus the latest snapshot.
+ *   ops   — every op, keyed by [docId, seq]. Appending is the hot path (every edit).
+ *
+ * Load = snapshot state + replay of the ops after it. The snapshot carries the hash of its
+ * state; a mismatch means the cache is suspect and the whole log is replayed instead.
  */
-export type DocRecord = {
+import { openDB, type DBSchema, type IDBPDatabase, type IDBPTransaction } from 'idb';
+import type { Document, Op, State } from '../model/types';
+import { SCHEMA_VERSION } from '../model/types';
+import { applyOp, createDocument, replay } from '../model/apply';
+import { hashState } from '../model/hash';
+import { text as viewText } from '../model/views';
+import { countWords } from '../util/text';
+import { displayTitle } from '../docs/title';
+
+export type Snapshot = { state: State; opCount: number; hash: string; at: string };
+
+export type DocHeader = {
   id: string;
   title: string;
-  text: string;
   createdAt: string;
   updatedAt: string;
+  words: number;
+  pendingChanges: number;
+  authors: Document['authors'];
+  snapshot: Snapshot;
 };
 
-export type DocSummary = Omit<DocRecord, 'text'> & { words: number };
+export type DocSummary = Omit<DocHeader, 'snapshot' | 'authors'>;
+
+type OpRow = { docId: string; seq: number; op: Op };
+
+/** Phase 0 record shape, migrated on upgrade. */
+type V1Doc = { id: string; title: string; text: string; createdAt: string; updatedAt: string };
 
 interface ShoulderDB extends DBSchema {
-  docs: {
-    key: string;
-    value: DocRecord;
-    indexes: { 'by-updated': string };
-  };
+  docs: { key: string; value: DocHeader; indexes: { 'by-updated': string } };
+  ops: { key: [string, number]; value: OpRow; indexes: { 'by-doc': string } };
 }
 
 const DB_NAME = 'shoulder-md';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
+
+/** Snapshot after this many ops since the last one, or after this much time. */
+export const SNAPSHOT_EVERY_OPS = 200;
+export const SNAPSHOT_EVERY_MS = 30_000;
 
 let dbPromise: Promise<IDBPDatabase<ShoulderDB>> | undefined;
 
 function db(): Promise<IDBPDatabase<ShoulderDB>> {
   dbPromise ??= openDB<ShoulderDB>(DB_NAME, DB_VERSION, {
-    upgrade(database) {
-      const store = database.createObjectStore('docs', { keyPath: 'id' });
-      store.createIndex('by-updated', 'updatedAt');
+    async upgrade(database, oldVersion, _newVersion, tx) {
+      if (oldVersion < 1) {
+        const docs = database.createObjectStore('docs', { keyPath: 'id' });
+        docs.createIndex('by-updated', 'updatedAt');
+      }
+      if (oldVersion < 2) {
+        const ops = database.createObjectStore('ops', { keyPath: ['docId', 'seq'] });
+        ops.createIndex('by-doc', 'docId');
+        if (oldVersion === 1) await migrateV1(tx);
+      }
     },
   });
   return dbPromise;
+}
+
+async function migrateV1(tx: IDBPTransaction<ShoulderDB, ('docs' | 'ops')[], 'versionchange'>) {
+  const docs = tx.objectStore('docs');
+  const ops = tx.objectStore('ops');
+  const old = (await docs.getAll()) as unknown as V1Doc[];
+  for (const v1 of old) {
+    if (!('text' in v1)) continue;
+    const doc = createDocument({
+      id: v1.id,
+      text: v1.text,
+      title: v1.title,
+      author: 'me',
+      ts: v1.createdAt,
+      tracking: false,
+    });
+    doc.updatedAt = v1.updatedAt;
+    await docs.put(headerOf(doc, doc.ops.length, v1.updatedAt));
+    for (let i = 0; i < doc.ops.length; i++)
+      await ops.put({ docId: doc.id, seq: i, op: doc.ops[i]! });
+  }
 }
 
 /** For tests: drop the cached connection so a fresh fake database is opened. */
@@ -44,45 +94,127 @@ export function resetConnection(): void {
   dbPromise = undefined;
 }
 
-export function newId(): string {
-  // Time-sortable, URL-safe. Enough for a single-user local store; ULID proper comes with phase 1.
-  const t = Date.now().toString(36).padStart(9, '0');
-  const r = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) =>
-    (b % 36).toString(36),
-  ).join('');
-  return `${t}${r}`;
+function headerOf(doc: Document, opCount: number, at: string): DocHeader {
+  const clean = viewText(doc.state, 'clean');
+  return {
+    id: doc.id,
+    title: displayTitle(doc.state.meta.title, clean),
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+    words: countWords(clean),
+    pendingChanges: Object.values(doc.state.changes).filter((c) => c.status === 'pending').length,
+    authors: doc.authors,
+    snapshot: { state: doc.state, opCount, hash: hashState(doc.state), at },
+  };
 }
 
-export async function createDoc(
-  init: Partial<Pick<DocRecord, 'title' | 'text'>> = {},
-): Promise<DocRecord> {
-  const now = new Date().toISOString();
-  const doc: DocRecord = {
-    id: newId(),
-    title: init.title ?? 'Untitled',
-    text: init.text ?? '',
-    createdAt: now,
-    updatedAt: now,
-  };
-  await (await db()).put('docs', doc);
+export async function createDoc(init: {
+  text?: string;
+  title?: string;
+  author: string;
+  tracking?: boolean;
+}): Promise<Document> {
+  const doc = createDocument({
+    text: init.text,
+    title: init.title,
+    author: init.author,
+    tracking: init.tracking,
+  });
+  const d = await db();
+  const tx = d.transaction(['docs', 'ops'], 'readwrite');
+  await tx.objectStore('docs').put(headerOf(doc, doc.ops.length, doc.updatedAt));
+  for (let i = 0; i < doc.ops.length; i++)
+    await tx.objectStore('ops').put({ docId: doc.id, seq: i, op: doc.ops[i]! });
+  await tx.done;
   return doc;
 }
 
-export async function getDoc(id: string): Promise<DocRecord | undefined> {
-  return (await db()).get('docs', id);
+export type Loaded = { doc: Document; recovered: boolean };
+
+/** Loads a document: snapshot plus the ops after it, or a full replay if the snapshot is suspect. */
+export async function loadDoc(id: string): Promise<Loaded | undefined> {
+  const d = await db();
+  const header = await d.get('docs', id);
+  if (!header) return undefined;
+  const rows = await d.getAllFromIndex('ops', 'by-doc', id);
+  rows.sort((a, b) => a.seq - b.seq);
+  const ops = rows.map((r) => r.op);
+
+  let state: State;
+  let recovered = false;
+  const snap = header.snapshot;
+  if (snap && snap.opCount <= ops.length && hashState(snap.state) === snap.hash) {
+    state = snap.state;
+    for (const op of ops.slice(snap.opCount)) state = applyOp(state, op).state;
+  } else {
+    recovered = true;
+    console.warn(
+      `shoulder-md: snapshot for ${id} is missing or corrupt; replaying ${ops.length} ops`,
+    );
+    state = replay(ops);
+  }
+  const doc: Document = {
+    schemaVersion: SCHEMA_VERSION,
+    id,
+    createdAt: header.createdAt,
+    updatedAt: header.updatedAt,
+    authors: header.authors,
+    ops,
+    state,
+  };
+  return { doc, recovered };
 }
 
-export async function putDoc(doc: DocRecord): Promise<void> {
-  await (await db()).put('docs', doc);
+export type AppendResult = { snapshotted: boolean };
+
+/**
+ * Appends ops (already applied in `doc`) and refreshes the header. Takes a snapshot when due.
+ * `doc.ops` must already contain the new ops at the end.
+ */
+export async function appendOps(
+  doc: Document,
+  newOps: Op[],
+  opts: { forceSnapshot?: boolean } = {},
+): Promise<AppendResult> {
+  const d = await db();
+  const tx = d.transaction(['docs', 'ops'], 'readwrite');
+  const docs = tx.objectStore('docs');
+  const opsStore = tx.objectStore('ops');
+  const existing = await docs.get(doc.id);
+  const firstSeq = doc.ops.length - newOps.length;
+  for (let i = 0; i < newOps.length; i++)
+    await opsStore.put({ docId: doc.id, seq: firstSeq + i, op: newOps[i]! });
+
+  const now = doc.updatedAt;
+  const prevSnap = existing?.snapshot;
+  const due =
+    opts.forceSnapshot ||
+    !prevSnap ||
+    doc.ops.length - prevSnap.opCount >= SNAPSHOT_EVERY_OPS ||
+    Date.parse(now) - Date.parse(prevSnap.at) >= SNAPSHOT_EVERY_MS;
+  const header = headerOf(doc, doc.ops.length, now);
+  if (!due && prevSnap) header.snapshot = prevSnap;
+  await docs.put(header);
+  await tx.done;
+  return { snapshotted: due };
 }
 
 export async function deleteDoc(id: string): Promise<void> {
-  await (await db()).delete('docs', id);
+  const d = await db();
+  const tx = d.transaction(['docs', 'ops'], 'readwrite');
+  await tx.objectStore('docs').delete(id);
+  const keys = await tx.objectStore('ops').index('by-doc').getAllKeys(id);
+  for (const k of keys) await tx.objectStore('ops').delete(k);
+  await tx.done;
 }
 
 export async function listDocs(): Promise<DocSummary[]> {
   const all = await (await db()).getAllFromIndex('docs', 'by-updated');
-  return all.reverse().map(({ text, ...rest }) => ({ ...rest, words: countWords(text) }));
+  return all.reverse().map(({ snapshot: _s, authors: _a, ...rest }) => {
+    void _s;
+    void _a;
+    return rest;
+  });
 }
 
 /** Ask the browser not to evict our storage under pressure. Returns whether it agreed. */

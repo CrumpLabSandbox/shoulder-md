@@ -1,30 +1,38 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { createEditor, type EditorHandle } from '../editor/createEditor';
+  import { createEditor, type EditorHandle, type Transaction } from '../editor/createEditor';
 
   let {
     docId,
     text,
-    onchange,
-  }: { docId: string | undefined; text: string; onchange: (text: string) => void } = $props();
+    version = 0,
+    ontransaction,
+  }: {
+    docId: string | undefined;
+    text: string;
+    /** Bump to force the buffer to be replaced with `text` (resync after an external change). */
+    version?: number;
+    ontransaction: (tr: Transaction) => void;
+  } = $props();
 
   let host: HTMLDivElement;
   let editor: EditorHandle | undefined;
-  let loadedDocId: string | undefined;
+  let loadedKey: string | undefined;
 
   onMount(() => {
-    editor = createEditor({ parent: host, doc: text, onChange: onchange });
-    loadedDocId = docId;
+    editor = createEditor({ parent: host, doc: text, onTransaction: ontransaction });
+    loadedKey = `${docId}:${version}`;
     editor.focus();
     return () => editor?.destroy();
   });
 
-  // When the open document changes, replace the buffer (and reset undo history).
+  // When the open document (or the resync version) changes, replace the buffer and reset undo.
   $effect(() => {
     if (!editor) return;
-    if (docId !== loadedDocId) {
+    const key = `${docId}:${version}`;
+    if (key !== loadedKey) {
       editor.setText(text);
-      loadedDocId = docId;
+      loadedKey = key;
       editor.focus();
     }
   });

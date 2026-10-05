@@ -22,6 +22,8 @@ export type AutosaveOptions<T> = {
   save: (value: T) => Promise<void>;
   delayMs?: number;
   onStatus?: (status: SaveStatus) => void;
+  /** Combines a queued value with a newly scheduled one. Default: the new value replaces the old. */
+  merge?: (pending: T, next: T) => T;
 };
 
 export function createAutosave<T>(opts: AutosaveOptions<T>): Autosave<T> {
@@ -59,8 +61,10 @@ export function createAutosave<T>(opts: AutosaveOptions<T>): Autosave<T> {
       })
       .catch((err: unknown) => {
         lastError = err;
-        // Keep the value so a later flush can retry.
-        pending ??= { value };
+        // Keep the value so a later flush can retry, merged with anything queued meanwhile.
+        pending = pending
+          ? { value: opts.merge ? opts.merge(value, pending.value) : pending.value }
+          : { value };
         setStatus('error');
       })
       .finally(() => {
@@ -71,7 +75,7 @@ export function createAutosave<T>(opts: AutosaveOptions<T>): Autosave<T> {
 
   return {
     schedule(value: T) {
-      pending = { value };
+      pending = pending && opts.merge ? { value: opts.merge(pending.value, value) } : { value };
       setStatus('dirty');
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { createSettingsStore, type Layout } from '../settings/settings.svelte';
   import { createWorkspace } from '../docs/workspace.svelte';
+  import { loadAuthor } from '../docs/identity';
   import { attachFlushTriggers } from '../persist/autosave';
   import { requestPersistence } from '../persist/idb';
   import Toolbar from './Toolbar.svelte';
@@ -12,7 +13,7 @@
   import StatusBar from './StatusBar.svelte';
 
   const settings = createSettingsStore();
-  const ws = createWorkspace();
+  const ws = createWorkspace(loadAuthor());
 
   let docsOpen = $state(false);
   let settingsOpen = $state(false);
@@ -63,7 +64,7 @@
 
 <div class="app">
   <Toolbar
-    title={ws.current?.title ?? ''}
+    title={ws.title}
     {layout}
     {docsOpen}
     {settingsOpen}
@@ -92,7 +93,8 @@
               bind:this={editor}
               docId={ws.current?.id}
               text={ws.text}
-              onchange={(t) => ws.setText(t)}
+              version={ws.version}
+              ontransaction={(tr) => ws.applyTransaction(tr)}
             />
           </div>
         {/if}

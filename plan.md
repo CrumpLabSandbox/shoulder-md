@@ -2,7 +2,7 @@
 
 A browser-based Markdown editor with Word-style tracked changes and comments, built on a structured JSON layer that records every edit and the reason for it. Exports to Markdown, Word, PDF, or the full JSON. Over time, a library of edited documents whose history can teach Claude to edit the way this writer edits.
 
-Status: phase 0 built (writing app with autosave, fonts, preview). This document is the spec for v1 and the roadmap after it.
+Status: phases 0 and 1 built (writing app with autosave, fonts, preview; sentence-level model and op log underneath). This document is the spec for v1 and the roadmap after it.
 
 ---
 
@@ -178,51 +178,49 @@ Offset maps between the three are computed on demand so decorations and comment 
 
 ### Operations
 
-Every op has `id`, `changeId`, `author`, `ts`, and optional `reason` and `reasonTags`. Ops in the same `changeId` are one tracked change in the UI.
+Every op has `id`, `author`, and `ts`. Text-affecting ops also carry `alloc` (the fresh ids the reconciler handed out, so a replay reuses them) and `effects` (what happened to the structure, for readers of the log). Ops in the same `changeId` are one tracked change in the UI.
 
 | Op | Payload | Effect |
 |---|---|---|
-| `insert` | sentenceId, offset (clean coords), text | Add an `ins` span, or plain `text` if tracking is off |
-| `delete` | sentenceId, from, to (clean coords) | Convert the range to `del` spans; if the range is inside this author's own pending `ins`, remove it outright (Word behavior) |
-| `split_sentence` | sentenceId, offset, newId | Second sentence gets `newId` |
-| `merge_sentence` | sentenceId, nextId | Next sentence's spans append to this one; `nextId` retires |
-| `insert_block` | afterBlockId, block | New block with new ids |
-| `delete_block` | blockId | Block marked deleted (its sentences become all-`del`) |
-| `set_block` | blockId, kind, attrs | Heading level, list type, etc. |
-| `move_block` | blockId, afterBlockId | Reorder |
-| `accept` | changeId | `ins` → `text`; `del` spans removed |
-| `reject` | changeId | `ins` spans removed; `del` → `text` |
+| `import` | text | Sets the whole document, untracked. The first op of every document; also the resync safety net |
+| `edit` | changeId, from, to (positions: sentenceId + offset in that sentence's revision text), insert, tracked | The one text primitive. Tracked: plain text in the range becomes `del`, the author's own pending `ins` in the range vanishes outright (Word behavior), another author's `ins` becomes `del`, and the insertion becomes `ins`. Untracked: the range is removed and the insertion is plain text |
+| `accept` | changeIds | `ins` → text; `del` spans removed |
+| `reject` | changeIds | `ins` spans removed; `del` → text |
 | `set_reason` | changeId, reason, reasonTags | Attach or edit a reason |
-| `comment_add` | threadId, anchor, body | Anchor: sentenceId(s) + range in clean coords |
-| `comment_reply` | threadId, body | |
+| `comment_add` | threadId, commentId, anchor, body, changeId? | Anchor: first-to-last sentence ids plus offsets in the first and last |
+| `comment_reply` | threadId, commentId, body | |
 | `comment_edit` | threadId, commentId, body | |
-| `comment_resolve` / `comment_reopen` | threadId | |
+| `comment_resolve` | threadId, resolved | |
 | `set_tracking` | on | Recorded so history shows when tracking was off |
-| `set_meta` | title, tags, status, libraryEligible | |
+| `set_meta` | patch of title, tags, status, libraryEligible | An empty title means "derive from the text" |
 
-Replay is deterministic: `apply(apply(empty, ops[0]), ops[1]) ...` must yield `state`. Tests assert this on every fixture and on randomly generated edit sequences.
+There are no block or sentence ops. Headings, list markers and paragraph breaks are text, so an `edit` is how they change, and the reconciler re-derives the structure afterwards. Splits and merges are reported as `effects` on the op (`split`, `merge`, `sentence_added`, `sentence_removed`, `block_added`, `block_removed`) rather than being ops of their own.
+
+Per-change metadata lives in `state.changes[changeId]`: author, time, tracked or not, status, reason, who decided and when, and the before/after text captured at decision time. Edits made with tracking off get a record too, auto-accepted, so history is complete without cluttering the margin.
+
+Replay is deterministic: `apply(apply(empty, ops[0]), ops[1]) ...` yields `state`, ids included. A property test replays random edit, accept and reject sequences and asserts equality with an id generator that throws if called.
 
 ### Sentence segmentation
 
-Block segmentation uses a small CommonMark block parser (the `mdast` tree from `micromark`/`mdast-util-from-markdown` is enough; we only need block boundaries and kinds, plus inline text for sentence splitting).
+Block segmentation uses the Lezer Markdown parser that CodeMirror already bundles (with GFM), so what the writer sees as a block is what the model calls a block. Leaf nodes (paragraphs, headings, fenced and indented code, tables, rules, HTML blocks) become blocks; list items and blockquotes are containers whose markers are glued onto the leaf they introduce. Gaps between leaves are split at the gap's last newline: blank lines trail the previous block, markers and indentation lead the next. Every character belongs to exactly one block, so concatenating the blocks reproduces the source.
 
-Sentence splitting runs on each paragraph-like block's clean text:
+Sentence splitting runs on each prose block's revision text (paragraphs, headings, list items):
 
-- `Intl.Segmenter('en', { granularity: 'sentence' })` where available, with a fallback rule-based splitter.
-- Post-rules: do not split on abbreviations (e.g., i.e., Dr., Fig.), inside inline code, inside links, or after a number followed by a period at line start. Keep trailing whitespace with the sentence it follows.
-- Headings and list items are usually one sentence but can be several.
-- Code, tables, HTML blocks, and thematic breaks are a single sentence each. No splitting.
+- `Intl.Segmenter('en', { granularity: 'sentence' })` where available, with a regex fallback.
+- Hard-wrapped lines are not sentence ends: newlines are treated as spaces for boundary finding only.
+- Merge rules: no split after an abbreviation (e.g., i.e., Dr., Fig., ...), inside inline code, link destinations or URLs, after a bare marker such as `1. ` or `# `, or when no whitespace follows the terminator. Trailing whitespace stays with the sentence before it.
+- Code, tables, HTML blocks, and thematic breaks are a single sentence each.
 
 ### Id stability (the hard part)
 
-The editor is a free-form text buffer. The user can type anything anywhere, including a period that splits a sentence or a backspace that merges two. The reconciler turns a CodeMirror text change into model ops while keeping ids stable:
+The editor is a free-form text buffer. The user can type anything anywhere, including a period that splits a sentence or a backspace that merges two. The model works on the document as one flat sequence of spans, each tagged with the sentence and block it came from:
 
-1. Map the change's `from`/`to` from revision coordinates to the affected block(s) and sentence(s).
-2. If the change stays inside one sentence and introduces no sentence or block boundary, emit `insert`/`delete` on that sentence. Done. This is the 95% path.
-3. Otherwise, re-segment the affected block(s) only. Match new sentences to old by a greedy alignment on clean text (longest common overlap, then position). Each matched sentence keeps its id. Unmatched old sentences retire; unmatched new ones get fresh ids. Boundary changes become explicit `split_sentence` / `merge_sentence` ops, so the log says what happened rather than leaving it to be inferred.
-4. A paragraph break inside a sentence becomes `split_sentence` plus `insert_block`; deleting a paragraph break is the reverse.
+1. An edit is applied to the flat spans at absolute revision offsets. Inserted text carries no tag.
+2. The whole revision text is re-segmented into blocks and sentences (fast enough: Lezer is incremental-grade and the segmenter is per block).
+3. Each new sentence takes the id of the old sentence that contributed the most of its characters, as long as no other new sentence has a stronger claim on that id (greedy by overlap, ties to document order). Blocks follow the same rule. Everything else gets a fresh id, recorded on the op. Because inserted text does not vote, typing a new sentence never steals the id of the one before it.
+4. Comment anchors are carried through as absolute ranges via an offset map of the edit, then re-anchored to the new sentences. An anchor whose text is entirely gone becomes orphaned (`anchor: null`, with the block id as fallback), never deleted.
 
-Rule of thumb: the sentence that keeps the majority of its original characters keeps its id. Comments and reasons anchored to a sentence survive as long as that sentence does. A comment whose anchor range vanishes is marked `orphaned`, shown at the block level, never deleted.
+Rule of thumb: the sentence that keeps the majority of its original characters keeps its id. Structure follows the revision text, so a pending deletion of a period still ends a sentence until it is accepted; accepting it then merges, and the merge is reported as an effect.
 
 ### Tracked-change text in the editor buffer
 
@@ -241,10 +239,10 @@ Requirement: changes are saved consistently behind the scenes, with no save butt
 
 Design: the op log is append-only, so saving means appending new ops. Each op is tiny. This makes continuous save cheap and robust.
 
-- **Op append**: every editor transaction produces ops that are queued and written to the IndexedDB `ops` store within ~250 ms (debounced). The write is a single transaction per batch.
+- **Op append**: every editor transaction produces ops that are queued and written to the IndexedDB `ops` store (keyed by document id and sequence number) within ~250 ms (debounced). The write is a single transaction per batch; batches that queue up during a slow write are merged in order.
 - **Flush points**: on `blur`, `visibilitychange` to hidden, `pagehide`, and `beforeunload`, the queue is flushed synchronously as far as the browser allows.
-- **Snapshots**: a materialized `state` snapshot is written every N ops (say 200) or 30 s of activity, whichever first, and on document close. Load = latest snapshot + replay of ops after it, so opening a long document stays fast.
-- **Integrity**: on load, the replayed state's hash is compared with the snapshot hash. A mismatch triggers full replay and logs a model bug.
+- **Snapshots**: the document header in the `docs` store carries a materialized `state` snapshot, rewritten every 200 ops or 30 s of activity, whichever first, and when the document is closed or switched. Load = snapshot + replay of ops after it, so opening a long document stays fast.
+- **Integrity**: the snapshot carries a hash of its state. On load a mismatch triggers a full replay from the op log and a console warning. In the editor, after every transaction the model's revision text is compared with the buffer; a mismatch is logged as a bug and the model resyncs from the buffer with an `import` op.
 - **Status indicator**: "Saved", "Saving…", or "Unsaved changes (n)" in the status bar. Error state if IndexedDB fails, with an immediate "Download JSON" escape hatch.
 - **Multi-tab**: a `BroadcastChannel` lock per document. A second tab opening the same document gets it read-only with a "Take over" button.
 - **Named versions**: the user can name the current point ("sent to reviewer"). This is a `set_meta`-style marker op; nothing is copied.
@@ -344,12 +342,12 @@ Each phase ends with something usable. Phases 0 and 1 overlap in time.
 - Autosave of the raw text to IndexedDB, status indicator, multi-document list.
 - Done when: it is a pleasant Markdown writing app you would use daily, with no track changes yet.
 
-### Phase 1: Document model (1 to 2 weeks)
-- `src/model/`: types, segmenter, reconciler, apply/replay, views and offset maps.
-- Property tests: random edit sequences replay to the same state; ids stable under in-sentence edits; split/merge produce the expected ops.
-- Editor adapter: every CodeMirror transaction becomes ops; the model's revision text matches the buffer at all times.
-- Persistence switches from raw text to the op log plus snapshots (section 5).
-- Done when: documents written in phase 0 migrate, and the model survives a fuzz test.
+### Phase 1: Document model (built)
+- `src/model/`: types, segmenter, span editing, reconciler, apply/replay, views and offset maps, change and comment helpers, state hash.
+- Property tests: random edit, accept and reject sequences replay to the identical state; untracked edits equal plain string edits; accept-all equals the clean text and reject-all the original.
+- Editor adapter: every CodeMirror transaction becomes `edit` ops (later changes first so earlier offsets stay valid), with keystroke coalescing into one change id; the model's revision text is checked against the buffer after each transaction.
+- Persistence is the op log plus snapshots (section 5). Phase 0 raw-text documents migrate on first open via an `import` op.
+- Known gap for phase 2: undo is CodeMirror's buffer undo, which the model sees as a new edit. With tracking on, undoing a tracked deletion must restore the pending state rather than insert text; the adapter will handle undo through the model.
 
 ### Phase 2: Track changes (1 to 2 weeks)
 - Tracking toggle, insertion and deletion decorations, atomic deletion ranges, keystroke coalescing.

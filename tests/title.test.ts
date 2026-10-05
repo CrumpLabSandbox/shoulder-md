@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveTitle, nextTitle } from '../src/docs/title';
+import { deriveTitle, displayTitle } from '../src/docs/title';
 
 describe('deriveTitle', () => {
   it('uses the first heading', () => {
@@ -16,12 +16,9 @@ describe('deriveTitle', () => {
   });
 });
 
-describe('nextTitle', () => {
-  it('follows the text while the title was derived', () => {
-    expect(nextTitle('Untitled', '', '# Draft')).toBe('Draft');
-    expect(nextTitle('Draft', '# Draft', '# Draft two')).toBe('Draft two');
-  });
-  it('keeps a title set by hand', () => {
-    expect(nextTitle('Mine', '# Draft', '# Draft two')).toBe('Mine');
+describe('displayTitle', () => {
+  it('prefers an explicit title and derives otherwise', () => {
+    expect(displayTitle('Mine', '# Draft')).toBe('Mine');
+    expect(displayTitle('  ', '# Draft')).toBe('Draft');
   });
 });
