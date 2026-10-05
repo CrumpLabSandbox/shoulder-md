@@ -16,6 +16,8 @@ Tracked changes, comments, exports, the edits library, and Claude as an editor c
 
 ## Develop
 
+Requires Node 22 or newer. The project uses pnpm; if it is not installed, `corepack enable` (bundled with Node) sets it up, or run `npm install -g pnpm`. Plain `npm install` and `npm run dev` also work.
+
 ```sh
 pnpm install
 pnpm dev        # http://localhost:5173
