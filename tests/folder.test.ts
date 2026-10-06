@@ -255,3 +255,21 @@ describe('text → tracked edits', () => {
     );
   });
 });
+
+describe('moving between folders', () => {
+  it("removes a document's files and forgets them", async () => {
+    const fs = memoryDir();
+    const store = memoryFolderStore();
+    const sync = new FolderSync(fs.dir, store, fixed);
+    const d = doc('# Secret\n\nText.');
+    await sync.write(d);
+    expect(await sync.has(d.id)).toBe(true);
+    expect(await sync.remove(d.id)).toEqual(['secret.md', 'secret.shoulder.json']);
+    expect(fs.names()).toEqual([]);
+    expect(await sync.has(d.id)).toBe(false);
+    expect(await sync.remove(d.id)).toEqual([]);
+    // Written again later, it gets its name back.
+    await sync.write(d);
+    expect(fs.names()).toEqual(['secret.md', 'secret.shoulder.json']);
+  });
+});

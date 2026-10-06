@@ -38,6 +38,10 @@ export type ChangeRow = {
   contextAfter: string;
   reason?: string;
   reasonTags: string[];
+  /** Style guide principles linked to this change, with their current text where known. */
+  principles: { id: string; text?: string }[];
+  /** The document's genre, by name. */
+  genre?: string;
   /** Comment threads attached to this change. */
   discussion: { author: string; ts: string; body: string }[];
   outcome: Outcome;
@@ -142,6 +146,10 @@ export type RecordOptions = {
   includeUntracked?: boolean; // default false
   /** Author ids to display names. */
   authorNames?: Record<string, string>;
+  /** Principle ids to their text, from the style guides. */
+  principleTexts?: Record<string, string>;
+  /** The document's genre name. */
+  genreName?: string;
 };
 
 /** Every change in the document as a dataset row, in the order the changes were made. */
@@ -194,6 +202,11 @@ export function changeRecords(doc: Document, opts: RecordOptions = {}): ChangeRo
       after,
       ...(rec.reason ? { reason: rec.reason } : {}),
       reasonTags: rec.reasonTags ?? [],
+      principles: (rec.principles ?? []).map((id) => {
+        const text = opts.principleTexts?.[id];
+        return text !== undefined ? { id, text } : { id };
+      }),
+      ...(opts.genreName ? { genre: opts.genreName } : {}),
       discussion: final.comments
         .filter((t) => t.changeId === rec.id)
         .flatMap((t) =>

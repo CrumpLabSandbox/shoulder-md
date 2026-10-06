@@ -12,6 +12,8 @@
     folder,
     onconnect,
     onreconnect,
+    privateFolder,
+    onreconnectprivate,
   }: {
     text: string;
     saveStatus: SaveStatus;
@@ -20,6 +22,8 @@
     folder: FolderStatus;
     onconnect: () => void;
     onreconnect: () => void;
+    privateFolder: FolderStatus;
+    onreconnectprivate: () => void;
   } = $props();
 
   const words = $derived(countWords(text));
@@ -72,6 +76,22 @@
         >Folder error: retry “{folder.name}”</button
       >
     {/if}
+    {#if privateFolder.status === 'connected'}
+      <span
+        class="synced"
+        title="Documents with Claude off are written to “{privateFolder.name}” instead"
+        ><span class="dot private"></span>Private: {privateFolder.name}</span
+      >
+    {:else if privateFolder.status === 'needs-permission' || privateFolder.status === 'error'}
+      <button
+        class="warn"
+        onclick={onreconnectprivate}
+        title={privateFolder.status === 'error'
+          ? privateFolder.error
+          : 'The browser needs your permission again to write to the private folder'}
+        >Reconnect private folder “{privateFolder.name}”</button
+      >
+    {/if}
   </span>
   <span class="counts">{words.toLocaleString()} words · {chars.toLocaleString()} characters</span>
 </footer>
@@ -103,6 +123,13 @@
   }
   .dot.ok {
     background: #16a34a;
+  }
+  .dot.private {
+    background: var(--fg-faint);
+  }
+  .folder {
+    display: inline-flex;
+    gap: 12px;
   }
   .save {
     display: inline-flex;

@@ -14,14 +14,24 @@ import {
   idbFolderStore,
   setFolderRoot,
   type DocSummary,
+  type FolderKind,
   type LibraryEntry,
 } from '../persist/idb';
 import { FolderSync, type External } from '../folder/sync';
 import { folderSupported, permissionOf, pickFolder, type DirHandleLike } from '../folder/fs';
-import { editsToMatch, type OpBuilder } from '../folder/merge';
+import { cleanToRevision, editsToMatch, type OpBuilder } from '../folder/merge';
+import {
+  baseGuideTemplate,
+  genreGuideTemplate,
+  genrePrefix,
+  numberingEdits,
+  parsePrinciples,
+  resolvePrinciples,
+  type ResolvedPrinciple,
+} from '../guides/principles';
 import { docStats } from '../library/stats';
 import { changeRecords, toJsonl, type RecordOptions } from '../library/records';
-import type { DocMeta } from '../model/types';
+import type { DocMeta, MetaPatch } from '../model/types';
 import { exportCriticMarkup, exportMarkdown, documentFromCriticMarkup } from '../export/markdown';
 import { exportJson, importJson } from '../export/json';
 import { downloadBlob, downloadText, slugify } from '../export/download';
@@ -161,10 +171,12 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     save: async ({ doc, ops, force }) => {
       await appendOps(doc, ops, { forceSnapshot: force });
       lastSavedAt = Date.now();
-      if (sync) folderWriter.schedule({ doc, force: false });
+      if (syncs.shared || syncs.private) folderWriter.schedule({ doc, force: false });
       docs = docs
         .map((d) =>
-          d.id === doc.id ? { ...d, ...docStats(doc.state), updatedAt: doc.updatedAt } : d,
+          d.id === doc.id
+            ? { id: d.id, createdAt: d.createdAt, updatedAt: doc.updatedAt, ...docStats(doc.state) }
+            : d,
         )
         .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
     },
@@ -193,7 +205,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       await open(doc.id);
     }
     ready = true;
-    await restoreFolder();
+    await restoreFolders();
   }
 
   /** Flush pending ops and write a snapshot of the open document before leaving it. */
@@ -681,14 +693,30 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
 
   /* ---------- folder sync ---------- */
 
-  let folder = $state.raw<FolderStatus>(
-    folderSupported() ? { status: 'none' } : { status: 'unsupported' },
-  );
+  // Two folders: 'shared' is where Claude Code may work; 'private' holds documents with Claude
+  // switched off. Each document is written to the one its Claude access allows.
+  const initialFolder: FolderStatus = folderSupported()
+    ? { status: 'none' }
+    : { status: 'unsupported' };
+  let folders = $state.raw<Record<FolderKind, FolderStatus>>({
+    shared: initialFolder,
+    private: initialFolder,
+  });
   let external = $state.raw<ExternalChange | undefined>(undefined);
   let folderNotice = $state<string | undefined>(undefined);
-  let sync: FolderSync | undefined;
+  const syncs: Record<FolderKind, FolderSync | undefined> = {
+    shared: undefined,
+    private: undefined,
+  };
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let polling = false;
+
+  const isConnected = (kind: FolderKind) => !!syncs[kind] && folders[kind].status === 'connected';
+  const setFolder = (kind: FolderKind, s: FolderStatus) => (folders = { ...folders, [kind]: s });
+  const folderName = (kind: FolderKind) => {
+    const f = folders[kind];
+    return f.status === 'none' || f.status === 'unsupported' ? '' : f.name;
+  };
 
   type FolderBatch = { doc: Document; force: boolean };
   const folderWriter = createAutosave<FolderBatch>({
@@ -698,12 +726,47 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     merge: (a, b) => ({ doc: b.doc, force: a.force || b.force }),
   });
 
-  /** Writes one document to the folder, or records the outside change it found. */
+  type AccessMeta = Pick<DocMeta, 'claude' | 'genre' | 'guide'>;
+
+  /**
+   * Whether Claude may work with a document: its own switch if set, otherwise its genre's
+   * default (on, unless the genre is private). A genre that no longer exists keeps Claude off,
+   * so deleting a private genre never exposes its documents. A private genre's own guide is
+   * private too.
+   */
+  function claudeAllowed(meta: AccessMeta): boolean {
+    if (meta.claude !== undefined) return meta.claude;
+    if (meta.guide?.role === 'genre') return !meta.guide.private;
+    if (!meta.genre) return true;
+    const genre = docs.find((d) => d.id === meta.genre && d.guide?.role === 'genre');
+    if (!genre) return false;
+    return !genre.guide?.private;
+  }
+
+  function metaOf(id: string): AccessMeta {
+    if (current?.id === id) return current.state.meta;
+    return docs.find((d) => d.id === id) ?? {};
+  }
+
+  const folderFor = (meta: AccessMeta): FolderKind => (claudeAllowed(meta) ? 'shared' : 'private');
+
+  /** Writes one document to its folder (moving it out of the other), or records an outside change. */
   async function syncDoc(doc: Document, force = false): Promise<void> {
-    if (!sync || folder.status !== 'connected') return;
+    const kind = folderFor(doc.state.meta);
+    const other: FolderKind = kind === 'shared' ? 'private' : 'shared';
+    const otherSync = syncs[other];
+    if (otherSync && isConnected(other)) {
+      try {
+        if (await otherSync.has(doc.id)) await otherSync.remove(doc.id);
+      } catch (e) {
+        folderFailed(other, e);
+      }
+    }
+    const target = syncs[kind];
+    if (!target || !isConnected(kind)) return;
     if (!force && external?.docId === doc.id) return; // waiting for the user to decide
     try {
-      const r = await sync.write(doc, { force });
+      const r = await target.write(doc, { force });
       // Ask only if the browser has not moved on since this copy was queued. If it has, a newer
       // write is on its way and will apply the rule: the browser wins, the disk copy is kept.
       const movedOn =
@@ -713,26 +776,30 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       if (r.backups.length) {
         folderNotice = `The copy on disk had changed too, so it was saved as ${r.backups.join(' and ')} before your version was written.`;
       }
-      if (r.written && folder.status === 'connected') folder = { ...folder, lastWrite: Date.now() };
+      const f = folders[kind];
+      if (r.written && f.status === 'connected') setFolder(kind, { ...f, lastWrite: Date.now() });
     } catch (e) {
-      folderFailed(e);
+      folderFailed(kind, e);
     }
   }
 
-  function folderFailed(e: unknown) {
-    const name = folder.status === 'none' || folder.status === 'unsupported' ? '' : folder.name;
-    stopPolling();
-    sync = undefined;
-    folder =
+  function folderFailed(kind: FolderKind, e: unknown) {
+    const name = folderName(kind);
+    syncs[kind] = undefined;
+    if (!syncs.shared && !syncs.private) stopPolling();
+    setFolder(
+      kind,
       e instanceof Error && (e.name === 'NotAllowedError' || e.name === 'SecurityError')
         ? { status: 'needs-permission', name }
-        : { status: 'error', name, error: e instanceof Error ? e.message : String(e) };
+        : { status: 'error', name, error: e instanceof Error ? e.message : String(e) },
+    );
   }
 
   /** Starts syncing with a granted folder: imports its documents, then writes ours. */
-  async function activate(handle: DirHandleLike): Promise<void> {
-    sync = new FolderSync(handle, idbFolderStore());
-    folder = { status: 'connected', name: handle.name };
+  async function activate(kind: FolderKind, handle: DirHandleLike): Promise<void> {
+    const sync = new FolderSync(handle, idbFolderStore(kind));
+    syncs[kind] = sync;
+    setFolder(kind, { status: 'connected', name: handle.name });
     try {
       const found = await sync.scan(
         docs.map((d) => d.id),
@@ -746,7 +813,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       await writeAll();
       startPolling();
     } catch (e) {
-      folderFailed(e);
+      folderFailed(kind, e);
     }
   }
 
@@ -758,26 +825,28 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     }
   }
 
-  /** On startup: use the remembered folder if the browser still allows it, else offer to reconnect. */
-  async function restoreFolder(): Promise<void> {
-    if (folder.status === 'unsupported') return;
-    const root = await getFolderRoot();
-    if (!root) return;
-    try {
-      const perm = await permissionOf(root.handle);
-      if (perm === 'granted') await activate(root.handle);
-      else folder = { status: 'needs-permission', name: root.name };
-    } catch (e) {
-      folder = {
-        status: 'error',
-        name: root.name,
-        error: e instanceof Error ? e.message : String(e),
-      };
+  /** On startup: use remembered folders the browser still allows, else offer to reconnect. */
+  async function restoreFolders(): Promise<void> {
+    for (const kind of ['shared', 'private'] as const) {
+      if (folders[kind].status === 'unsupported') continue;
+      const root = await getFolderRoot(kind);
+      if (!root) continue;
+      try {
+        const perm = await permissionOf(root.handle);
+        if (perm === 'granted') await activate(kind, root.handle);
+        else setFolder(kind, { status: 'needs-permission', name: root.name });
+      } catch (e) {
+        setFolder(kind, {
+          status: 'error',
+          name: root.name,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
     }
   }
 
-  /** Picks a folder (from a click) and starts syncing every document to it. */
-  async function connectFolder(): Promise<void> {
+  /** Picks a folder (from a click) and starts syncing documents to it. */
+  async function connectFolder(kind: FolderKind = 'shared'): Promise<void> {
     let handle: DirHandleLike;
     try {
       handle = await pickFolder();
@@ -786,37 +855,47 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       folderNotice = `Could not open the folder: ${e instanceof Error ? e.message : String(e)}`;
       return;
     }
-    stopPolling();
-    await clearFolderRecords();
-    await setFolderRoot({ handle, name: handle.name, connectedAt: nowIso() });
-    await activate(handle);
+    const otherRoot = await getFolderRoot(kind === 'shared' ? 'private' : 'shared');
+    if (otherRoot && 'isSameEntry' in otherRoot.handle) {
+      const same = await (
+        otherRoot.handle as unknown as { isSameEntry(h: unknown): Promise<boolean> }
+      ).isSameEntry(handle);
+      if (same) {
+        folderNotice = 'The shared and private folders must be different folders.';
+        return;
+      }
+    }
+    syncs[kind] = undefined;
+    await clearFolderRecords(kind);
+    await setFolderRoot({ handle, name: handle.name, connectedAt: nowIso() }, kind);
+    await activate(kind, handle);
   }
 
   /** Asks the browser for permission again (needs a click) and resumes syncing. */
-  async function reconnectFolder(): Promise<void> {
-    const root = await getFolderRoot();
-    if (!root) return void (folder = { status: 'none' });
+  async function reconnectFolder(kind: FolderKind = 'shared'): Promise<void> {
+    const root = await getFolderRoot(kind);
+    if (!root) return void setFolder(kind, { status: 'none' });
     try {
       const perm = await permissionOf(root.handle, true);
-      if (perm === 'granted') await activate(root.handle);
-      else folder = { status: 'needs-permission', name: root.name };
+      if (perm === 'granted') await activate(kind, root.handle);
+      else setFolder(kind, { status: 'needs-permission', name: root.name });
     } catch (e) {
-      folder = {
+      setFolder(kind, {
         status: 'error',
         name: root.name,
         error: e instanceof Error ? e.message : String(e),
-      };
+      });
     }
   }
 
-  async function disconnectFolder(): Promise<void> {
+  async function disconnectFolder(kind: FolderKind = 'shared'): Promise<void> {
     await folderWriter.flush();
-    stopPolling();
-    sync = undefined;
-    external = undefined;
-    await setFolderRoot(undefined);
-    await clearFolderRecords();
-    folder = { status: 'none' };
+    syncs[kind] = undefined;
+    if (!syncs.shared && !syncs.private) stopPolling();
+    if (kind === folderFor(current?.state.meta ?? {})) external = undefined;
+    await setFolderRoot(undefined, kind);
+    await clearFolderRecords(kind);
+    setFolder(kind, { status: 'none' });
   }
 
   function startPolling() {
@@ -835,10 +914,13 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     void poll();
   }
 
-  /** Looks for outside changes to the open document's files. */
+  /** Looks for outside changes to the open document's files, in whichever folder holds it. */
   async function poll(): Promise<void> {
     const doc = current;
-    if (!sync || !doc || external || polling) return;
+    if (!doc || external || polling) return;
+    const kind = folderFor(doc.state.meta);
+    const sync = syncs[kind];
+    if (!sync || !isConnected(kind)) return;
     // Unsaved browser changes win anyway; the next write handles any conflict.
     if (autosave.status !== 'saved' || folderWriter.status !== 'saved') return;
     polling = true;
@@ -848,7 +930,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       if (ext.kind === 'missing') folderWriter.schedule({ doc, force: false });
       else if (ext.kind !== 'none') external = { docId: doc.id, ext };
     } catch (e) {
-      folderFailed(e);
+      folderFailed(kind, e);
     } finally {
       polling = false;
     }
@@ -905,6 +987,214 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     if (current) await syncDoc(current, true);
   }
 
+  /* ---------- style guides, genres and Claude access ---------- */
+
+  const baseGuide = $derived(docs.find((d) => d.guide?.role === 'base'));
+  const genres = $derived(docs.filter((d) => d.guide?.role === 'genre'));
+  const currentGenre = $derived(
+    current?.state.meta.genre ? genres.find((g) => g.id === current!.state.meta.genre) : undefined,
+  );
+  /** The principles that apply to the open document: the base guide plus its genre's add-on. */
+  const principles = $derived<ResolvedPrinciple[]>(
+    resolvePrinciples(baseGuide?.guide?.principles ?? [], currentGenre?.guide?.principles ?? []),
+  );
+  /** The open document's guide, parsed live (the list entry lags until the next save). */
+  const currentGuide = $derived.by(() => {
+    const guide = current?.state.meta.guide;
+    if (!current || !guide) return undefined;
+    const parsed = parsePrinciples(viewText(current.state, 'clean'));
+    return { ...guide, principles: parsed.principles, unnumbered: parsed.unnumbered.length };
+  });
+  const claudeOn = $derived(current ? claudeAllowed(current.state.meta) : true);
+  /** Documents with Claude off that are not written to any folder because no private folder is set. */
+  const privateUnsynced = $derived(
+    folders.private.status === 'connected' ? 0 : docs.filter((d) => !claudeAllowed(d)).length,
+  );
+
+  function principleTexts(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const d of docs) for (const p of d.guide?.principles ?? []) out[p.id] = p.text;
+    return out;
+  }
+
+  /** Opens the base guide, creating it from the template the first time. */
+  async function openBaseGuide(): Promise<void> {
+    if (baseGuide) return open(baseGuide.id);
+    const doc = await createDoc({
+      text: baseGuideTemplate(),
+      author: author.id,
+      tracking: false,
+      meta: { guide: { role: 'base', prefix: 'B' } },
+    });
+    await refreshList();
+    await open(doc.id);
+  }
+
+  /** Creates a genre (its guide document) and opens it. */
+  async function createGenre(name: string, isPrivate: boolean): Promise<string | undefined> {
+    const clean = name.trim();
+    if (!clean) return undefined;
+    const prefix = genrePrefix(clean, ['B', ...genres.map((g) => g.guide!.prefix)]);
+    const doc = await createDoc({
+      text: genreGuideTemplate(clean, prefix),
+      author: author.id,
+      tracking: false,
+      title: clean,
+      meta: { guide: { role: 'genre', prefix, private: isPrivate } },
+    });
+    await refreshList();
+    await open(doc.id);
+    return doc.id;
+  }
+
+  type Confirm = (message: string) => boolean;
+
+  const titleOf = (id: string) =>
+    current?.id === id
+      ? displayTitle(current.state.meta.title, viewText(current.state, 'clean'))
+      : (docs.find((d) => d.id === id)?.title ?? 'Untitled');
+
+  function listTitles(ids: string[]): string {
+    const names = ids.map((id) => `“${titleOf(id)}”`);
+    if (names.length <= 3) return names.join(', ');
+    return `${names.slice(0, 3).join(', ')} and ${names.length - 3} more`;
+  }
+
+  /**
+   * Applies a change that may switch Claude access for some documents. When a folder is
+   * connected and files would move, asks first; returns false if the user declines.
+   */
+  async function changeAccess(
+    ids: string[],
+    predict: (id: string) => boolean,
+    apply: () => Promise<void>,
+    confirmFn: Confirm,
+  ): Promise<boolean> {
+    const moves = ids
+      .map((id) => ({ id, from: claudeAllowed(metaOf(id)), to: predict(id) }))
+      .filter((m) => m.from !== m.to);
+    const anyFolder = isConnected('shared') || isConnected('private');
+    if (moves.length && anyFolder) {
+      const leaving = moves.filter((m) => m.from).map((m) => m.id);
+      const joining = moves.filter((m) => !m.from).map((m) => m.id);
+      const parts: string[] = [];
+      if (leaving.length) {
+        const where = isConnected('private')
+          ? ` and written to the private folder “${folderName('private')}”`
+          : '. Choose a private folder in Settings to keep a copy on disk';
+        parts.push(
+          `Turn Claude off for ${listTitles(leaving)}? ${leaving.length === 1 ? 'Its files' : 'Their files'} will be deleted from the shared folder “${folderName('shared')}”${where}.`,
+        );
+      }
+      if (joining.length) {
+        parts.push(
+          `Turn Claude on for ${listTitles(joining)}? ${joining.length === 1 ? 'Its files' : 'Their files'} will move into the shared folder “${folderName('shared')}”, where Claude Code can read them.`,
+        );
+      }
+      if (!confirmFn(parts.join('\n\n'))) return false;
+    }
+    await apply();
+    for (const m of moves) {
+      if (current?.id === m.id) {
+        await autosave.flush();
+        await folderWriter.flush();
+        await syncDoc(current);
+      } else {
+        const doc = (await loadDoc(m.id))?.doc;
+        if (doc) await syncDoc(doc);
+      }
+    }
+    return true;
+  }
+
+  /** Sets a document's own Claude switch; `null` follows the genre's default. */
+  function setClaude(id: string, value: boolean | null, confirmFn: Confirm): Promise<boolean> {
+    return changeAccess(
+      [id],
+      () => claudeAllowed({ ...metaOf(id), claude: value ?? undefined }),
+      () => setDocMeta(id, { claude: value }),
+      confirmFn,
+    );
+  }
+
+  /** Puts a document in a genre; `null` means the base guide only. */
+  function setGenre(id: string, genreId: string | null, confirmFn: Confirm): Promise<boolean> {
+    return changeAccess(
+      [id],
+      () => claudeAllowed({ ...metaOf(id), genre: genreId ?? undefined }),
+      () => setDocMeta(id, { genre: genreId }),
+      confirmFn,
+    );
+  }
+
+  /** Marks a genre private (Claude off by default) or not. */
+  function setGenrePrivate(genreId: string, value: boolean, confirmFn: Confirm): Promise<boolean> {
+    const genre = genres.find((g) => g.id === genreId);
+    if (!genre?.guide) return Promise.resolve(false);
+    const members = docs
+      .filter((d) => (d.genre === genreId || d.id === genreId) && d.claude === undefined)
+      .map((d) => d.id);
+    if (
+      current &&
+      (current.state.meta.genre === genreId || current.id === genreId) &&
+      current.state.meta.claude === undefined &&
+      !members.includes(current.id)
+    ) {
+      members.push(current.id);
+    }
+    return changeAccess(
+      members,
+      () => !value,
+      () =>
+        setDocMeta(genreId, {
+          guide: { role: 'genre', prefix: genre.guide!.prefix, private: value },
+        }),
+      confirmFn,
+    );
+  }
+
+  /** Gives every principle without an id in the open guide the next id. */
+  function numberPrinciples(): number {
+    const guide = current?.state.meta.guide;
+    if (!current || !guide || view !== 'revision') return 0;
+    const edits = numberingEdits(viewText(current.state, 'clean'), guide.prefix);
+    if (!edits.length) return 0;
+    const sel = bridge?.getSelection() ?? { anchor: 0, head: 0 };
+    const ts = nowIso();
+    const builders: OpBuilder[] = edits.map((e) => (s) => {
+      const at = cleanToRevision(s, e.at);
+      return {
+        id: ulid(),
+        type: 'edit',
+        author: author.id,
+        ts,
+        changeId: ulid(),
+        from: absoluteToPos(s, at),
+        to: absoluteToPos(s, at),
+        insert: e.insert,
+        tracked: false,
+      };
+    });
+    const inverse = applyModelOps(builders);
+    recordUndo({ ops: inverse, before: sel, after: bridge?.getSelection() ?? sel, at: Date.now() });
+    return edits.length;
+  }
+
+  /** Links a change to style guide principles (replacing any earlier links). */
+  function linkPrinciples(changeId: string, ids: string[]) {
+    if (!current || !current.state.changes[changeId]) return;
+    const ts = nowIso();
+    const r = push({
+      id: ulid(),
+      type: 'set_principles',
+      author: author.id,
+      ts,
+      changeId,
+      principles: ids,
+    });
+    schedule([r.op], ts);
+  }
+
   /* ---------- the edits library ---------- */
 
   /** All documents with clean text for search. Saves the open document first so it is current. */
@@ -914,7 +1204,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
   }
 
   /** Changes a document's library metadata (status, tags, inclusion), open or not. */
-  async function setDocMeta(id: string, patch: Partial<Omit<DocMeta, 'title'>>): Promise<void> {
+  async function setDocMeta(id: string, patch: Omit<MetaPatch, 'title'>): Promise<void> {
     const ts = nowIso();
     const op: Op = { id: ulid(), type: 'set_meta', author: author.id, ts, patch };
     if (current?.id === id) {
@@ -925,7 +1215,11 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     }
     const doc = await appendToStored(id, JSON.parse(JSON.stringify(op)) as Op);
     if (doc)
-      docs = docs.map((d) => (d.id === id ? { ...d, ...docStats(doc.state), updatedAt: ts } : d));
+      docs = docs.map((d) =>
+        d.id === id
+          ? { id: d.id, createdAt: d.createdAt, updatedAt: ts, ...docStats(doc.state) }
+          : d,
+      );
   }
 
   /**
@@ -936,10 +1230,22 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     await park();
     const ids = (await storedLibraryEntries()).filter((e) => e.libraryEligible).map((e) => e.id);
     const authorNames = { [author.id]: author.name };
+    const texts = principleTexts();
     let rows: ReturnType<typeof changeRecords> = [];
     for (const id of ids) {
       const doc = current?.id === id ? current : (await loadDoc(id))?.doc;
-      if (doc) rows = rows.concat(changeRecords(doc, { ...opts, authorNames }));
+      if (!doc) continue;
+      const genreName = doc.state.meta.genre
+        ? genres.find((g) => g.id === doc.state.meta.genre)?.title
+        : undefined;
+      rows = rows.concat(
+        changeRecords(doc, {
+          ...opts,
+          authorNames,
+          principleTexts: texts,
+          ...(genreName ? { genreName } : {}),
+        }),
+      );
     }
     downloadText(
       `shoulder-library-${nowIso().slice(0, 10)}.jsonl`,
@@ -1042,8 +1348,40 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     get canUndo() {
       return canUndo;
     },
+    get privateFolder() {
+      return folders.private;
+    },
+    get baseGuide() {
+      return baseGuide;
+    },
+    get genres() {
+      return genres;
+    },
+    get currentGenre() {
+      return currentGenre;
+    },
+    get principles() {
+      return principles;
+    },
+    get currentGuide() {
+      return currentGuide;
+    },
+    get claudeOn() {
+      return claudeOn;
+    },
+    get privateUnsynced() {
+      return privateUnsynced;
+    },
+    claudeAllowed,
+    openBaseGuide,
+    createGenre,
+    setClaude,
+    setGenre,
+    setGenrePrivate,
+    numberPrinciples,
+    linkPrinciples,
     get folder() {
-      return folder;
+      return folders.shared;
     },
     get external() {
       return external;

@@ -4,7 +4,7 @@ A browser-based Markdown editor that is growing Word-style tracked changes and c
 
 ## Status
 
-Phases 0 to 6 of the plan: a Markdown writing app with Word-style tracked changes and comments, on a sentence-level document model and op log, with exports, an edits library, and sync to a local folder.
+Phases 0 to 7 of the plan: a Markdown writing app with Word-style tracked changes and comments, on a sentence-level document model and op log, with exports, an edits library, sync to a local folder, and style guides with a per-document Claude switch.
 
 - CodeMirror 6 editor with Markdown highlighting and a rendered preview (editor, split, or preview layouts).
 - Background autosave to the browser's IndexedDB on every change, with flushes on blur, tab hide, and unload.
@@ -17,7 +17,10 @@ Phases 0 to 6 of the plan: a Markdown writing app with Word-style tracked change
 - Library (⌘⌥L): choose which documents join the edits library, set their status and tags, search them, and export every change as JSON lines with its sentence before and after, neighbouring sentences, reason, discussion, and whether it was accepted or rejected. Nothing joins the library unless you include it.
 - Folder sync (Chrome and Edge): "Save to a folder…" in the status bar mirrors every document into a folder, such as a git repo, as `.md` and `.shoulder.json`, about a second after each save. Edits made to those files by other tools come back as tracked changes you can accept or reject; if both sides changed, your version wins and the disk version is kept as a `.conflict-` file.
 
-Tracked changes, comments, exports, the edits library, and Claude as an editor come in later phases.
+- Style guides: a base guide plus genre guides (Library → Style guides), where each top-level list item is a principle with a stable id like `[B4]`; "Give them ids" numbers new ones. Each document picks a genre, and a change card's § button links the change to the principles behind it.
+- The Claude switch (toolbar): each document allows Claude or not, by default from its genre (genres can be private). Documents that allow Claude sync to the shared folder, where Claude Code works; the rest sync only to a separate private folder (Settings → Folder). Changing access moves the files, after asking.
+
+Next: a principle inbox that Claude Code fills from your reasoned edits, then Claude as an editor, both run through Claude Code on the shared folder (no API key).
 
 ## Develop
 

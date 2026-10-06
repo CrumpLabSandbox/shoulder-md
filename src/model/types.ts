@@ -62,6 +62,8 @@ export type ChangeRecord = {
   status: ChangeStatus;
   reason?: string;
   reasonTags?: string[];
+  /** Ids of the style guide principles this change applies (see src/guides/principles.ts). */
+  principles?: string[];
   decidedBy?: string;
   decidedAt?: string;
   /** Captured when the change is decided (or immediately for untracked edits). */
@@ -94,13 +96,31 @@ export type CommentThread = {
   comments: Comment[];
 };
 
+/** Set on style guide documents: the base guide, or a genre's add-on. */
+export type GuideMeta = {
+  role: 'base' | 'genre';
+  /** Principle id prefix: 'B' for the base guide, a short unique prefix per genre. */
+  prefix: string;
+  /** Genres only: documents in this genre keep Claude off unless switched on. */
+  private?: boolean;
+};
+
 export type DocMeta = {
   /** Set by an explicit rename. Empty means the title is derived from the text. */
   title: string;
   tags: string[];
   status: 'draft' | 'in-review' | 'final';
   libraryEligible: boolean;
+  /** The genre guide's document id; absent means the base guide only. */
+  genre?: string;
+  /** Explicit Claude access for this document; absent means follow the genre's default. */
+  claude?: boolean;
+  /** Present when this document is a style guide. */
+  guide?: GuideMeta;
 };
+
+/** A metadata change: set the given fields; `null` clears an optional field. */
+export type MetaPatch = { [K in keyof DocMeta]?: DocMeta[K] | null };
 
 export type State = {
   blocks: Block[];
@@ -158,6 +178,7 @@ export type Op = OpBase &
         records?: Record<string, ChangeRecord | null>;
       } & StructuralOp)
     | { type: 'set_reason'; changeId: string; reason?: string; reasonTags?: string[] }
+    | { type: 'set_principles'; changeId: string; principles: string[] }
     | {
         type: 'comment_add';
         threadId: string;
@@ -170,7 +191,7 @@ export type Op = OpBase &
     | { type: 'comment_edit'; threadId: string; commentId: string; body: string }
     | { type: 'comment_resolve'; threadId: string; resolved: boolean }
     | { type: 'set_tracking'; on: boolean }
-    | { type: 'set_meta'; patch: Partial<DocMeta> }
+    | { type: 'set_meta'; patch: MetaPatch }
   );
 
 export type OpType = Op['type'];

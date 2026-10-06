@@ -31,6 +31,7 @@ export interface FolderStore {
   get(docId: string): Promise<FileRecord | undefined>;
   put(record: FileRecord): Promise<void>;
   all(): Promise<FileRecord[]>;
+  delete(docId: string): Promise<void>;
 }
 
 export type External =
@@ -234,6 +235,29 @@ export class FolderSync {
   }
 
   /**
+   * Removes a document's files from this folder (when it moves to the other folder). Returns
+   * the names removed. Nothing is backed up here: the browser holds the document.
+   */
+  async remove(docId: string): Promise<string[]> {
+    const rec = await this.store.get(docId);
+    if (!rec) return [];
+    const removed: string[] = [];
+    for (const ext of [MD, JSON_EXT]) {
+      const name = rec.base + ext;
+      if (!(await fileIfExists(this.dir, name))) continue;
+      await this.dir.removeEntry(name);
+      removed.push(name);
+    }
+    await this.store.delete(docId);
+    return removed;
+  }
+
+  /** Whether this folder holds (or last held) the document's files. */
+  async has(docId: string): Promise<boolean> {
+    return !!(await this.store.get(docId));
+  }
+
+  /**
    * Documents in the folder that the browser does not have: every readable `*.shoulder.json`
    * whose id is neither known nor deleted here. Their file names are recorded as theirs.
    */
@@ -281,5 +305,6 @@ export function memoryFolderStore(): FolderStore {
     get: async (id) => m.get(id),
     put: async (r) => void m.set(r.docId, { ...r }),
     all: async () => [...m.values()],
+    delete: async (id) => void m.delete(id),
   };
 }

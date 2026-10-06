@@ -14,6 +14,8 @@
   import Margin from './Margin.svelte';
   import StatusBar from './StatusBar.svelte';
   import Library from './Library.svelte';
+  import AccessMenu from './AccessMenu.svelte';
+  import GuideBanner from './GuideBanner.svelte';
 
   const settings = createSettingsStore();
   const ws = createWorkspace(loadAuthor(), {
@@ -159,7 +161,17 @@
     onexport={(kind) => void ws.exportAs(kind)}
     {libraryOpen}
     ontogglelibrary={() => (libraryOpen = !libraryOpen)}
-  />
+  >
+    {#snippet access()}
+      {#if ws.ready && ws.current}
+        <AccessMenu {ws} />
+      {/if}
+    {/snippet}
+  </Toolbar>
+
+  {#if ws.ready && ws.currentGuide && !libraryOpen}
+    <GuideBanner {ws} />
+  {/if}
 
   <div class="body">
     {#if docsOpen}
@@ -220,9 +232,11 @@
         onauthor={setAuthor}
         onclose={() => (settingsOpen = false)}
         folder={ws.folder}
-        onconnectfolder={() => void ws.connectFolder()}
-        onreconnectfolder={() => void ws.reconnectFolder()}
-        ondisconnectfolder={() => void ws.disconnectFolder()}
+        privateFolder={ws.privateFolder}
+        privateUnsynced={ws.privateUnsynced}
+        onconnectfolder={(kind) => void ws.connectFolder(kind)}
+        onreconnectfolder={(kind) => void ws.reconnectFolder(kind)}
+        ondisconnectfolder={(kind) => void ws.disconnectFolder(kind)}
       />
     {/if}
   </div>
@@ -281,6 +295,8 @@
     folder={ws.folder}
     onconnect={() => void ws.connectFolder()}
     onreconnect={() => void ws.reconnectFolder()}
+    privateFolder={ws.privateFolder}
+    onreconnectprivate={() => void ws.reconnectFolder('private')}
   />
 </div>
 

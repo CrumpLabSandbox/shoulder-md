@@ -171,6 +171,8 @@
             reasonRequested={ws.reasonRequest === it.change.id}
             onreasonhandled={() => ws.clearReasonRequest()}
             oncomment={(body) => ws.addComment(body, { changeId: it.change.id })}
+            principles={ws.principles}
+            onlink={(ids) => ws.linkPrinciples(it.change.id, ids)}
           />
         {:else if it.kind === 'comment'}
           <CommentCard

@@ -29,6 +29,7 @@ export interface DirHandleLike {
   readonly name: string;
   getFileHandle(name: string, options?: { create?: boolean }): Promise<FileHandleLike>;
   values(): AsyncIterable<FileHandleLike | DirHandleLike>;
+  removeEntry(name: string): Promise<void>;
   queryPermission?(descriptor: { mode: 'readwrite' }): Promise<Permission>;
   requestPermission?(descriptor: { mode: 'readwrite' }): Promise<Permission>;
 }

@@ -203,3 +203,19 @@ describe('folder sync state', () => {
     expect(await getTombstones()).toEqual(['x']);
   });
 });
+
+describe('private folder records', () => {
+  it('keeps shared and private records apart', async () => {
+    const shared = idbFolderStore('shared');
+    const priv = idbFolderStore('private');
+    await shared.put({ docId: 'a', base: 'a', opCount: 1 });
+    await priv.put({ docId: 'b', base: 'b', opCount: 1 });
+    expect((await shared.all()).map((r) => r.docId)).toEqual(['a']);
+    expect((await priv.all()).map((r) => r.docId)).toEqual(['b']);
+    await clearFolderRecords('private');
+    expect(await priv.all()).toEqual([]);
+    expect((await shared.all()).map((r) => r.docId)).toEqual(['a']);
+    await shared.delete('a');
+    expect(await shared.get('a')).toBeUndefined();
+  });
+});

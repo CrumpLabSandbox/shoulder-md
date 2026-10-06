@@ -44,6 +44,9 @@ export function memoryDir(name = 'repo') {
     async *values() {
       for (const k of [...files.keys()].sort()) yield handle(k);
     },
+    async removeEntry(fname) {
+      if (!files.delete(fname)) throw notFound();
+    },
   };
 
   return {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Snippet } from 'svelte';
   import type { Layout } from '../settings/settings.svelte';
   import type { View } from '../model/views';
 
@@ -26,6 +27,7 @@
     onexport,
     libraryOpen,
     ontogglelibrary,
+    access,
   }: {
     title: string;
     layout: Layout;
@@ -50,6 +52,8 @@
     onexport: (kind: ExportKind) => void;
     libraryOpen: boolean;
     ontogglelibrary: () => void;
+    /** The genre and Claude access control. */
+    access?: Snippet;
   } = $props();
 
   type ExportKind =
@@ -115,6 +119,7 @@
     <button onclick={onredo} disabled={!canRedo} title="Redo (⌘⇧Z)" aria-label="Redo">↷</button>
   </div>
   <div class="right">
+    {@render access?.()}
     <button
       class="track"
       class:on={trackingOn}
@@ -214,6 +219,9 @@
   .title:focus {
     border-color: var(--border);
     background: var(--bg);
+  }
+  button {
+    white-space: nowrap;
   }
   button:disabled {
     opacity: 0.4;

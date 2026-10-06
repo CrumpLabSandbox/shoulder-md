@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
   import type { PendingChange } from '../model/changes';
   import { formatTime } from '../util/time';
+  import type { ResolvedPrinciple } from '../guides/principles';
 
   let {
     change,
@@ -16,6 +17,8 @@
     showTags,
     reasonRequested,
     onreasonhandled,
+    principles = [],
+    onlink,
   }: {
     change: PendingChange;
     color: string;
@@ -31,6 +34,10 @@
     /** Open the reason field and focus it (⌘⌥E). */
     reasonRequested: boolean;
     onreasonhandled: () => void;
+    /** The style guide principles that apply to this document. */
+    principles?: ResolvedPrinciple[];
+    /** Replaces the principles this change is linked to. */
+    onlink?: (ids: string[]) => void;
   } = $props();
 
   let reasonInput: HTMLInputElement | undefined = $state();
@@ -43,6 +50,31 @@
     onreasonhandled();
     void tick().then(() => reasonInput?.focus());
   });
+
+  let linking = $state(false);
+  let filter = $state('');
+  let filterInput: HTMLInputElement | undefined = $state();
+  const linked = $derived(change.record.principles ?? []);
+  const textOf = (id: string) => principles.find((p) => p.id === id)?.text;
+  const matches = $derived.by(() => {
+    const q = filter.trim().toLowerCase();
+    const list = q
+      ? principles.filter(
+          (p) => p.id.toLowerCase().startsWith(q) || p.text.toLowerCase().includes(q),
+        )
+      : principles;
+    return list.slice(0, 8);
+  });
+
+  function toggleLink(id: string) {
+    onlink?.(linked.includes(id) ? linked.filter((x) => x !== id) : [...linked, id]);
+  }
+
+  function openLinking() {
+    linking = !linking;
+    filter = '';
+    if (linking) void tick().then(() => filterInput?.focus());
+  }
 
   let commenting = $state(false);
   let commentText = $state('');
@@ -129,6 +161,14 @@
         title="Add a reason (⌘⌥E)">Why?</button
       >
     {/if}
+    {#if principles.length > 0 && onlink}
+      <button
+        class="link"
+        class:active={linking}
+        onclick={openLinking}
+        title="Link this change to style guide principles">§</button
+      >
+    {/if}
     <button class="comment" onclick={() => (commenting = !commenting)} title="Discuss this change"
       >💬</button
     >
@@ -162,6 +202,48 @@
           }
         }}
       />
+    </div>
+  {/if}
+
+  {#if linked.length > 0}
+    <ul class="linked">
+      {#each linked as id (id)}
+        <li title={textOf(id) ?? 'Not in this document’s guides'}>
+          <b>{id}</b>
+          <span class="ptext">{textOf(id) ?? '(not found)'}</span>
+          {#if onlink}
+            <button
+              class="unlink"
+              onclick={() => toggleLink(id)}
+              aria-label="Unlink {id}"
+              title="Unlink">×</button
+            >
+          {/if}
+        </li>
+      {/each}
+    </ul>
+  {/if}
+
+  {#if linking}
+    <div class="picker">
+      <input
+        bind:this={filterInput}
+        type="text"
+        placeholder="Find a principle by id or words…"
+        bind:value={filter}
+        onkeydown={(e) => {
+          if (e.key === 'Escape') linking = false;
+          if (e.key === 'Enter' && matches[0]) toggleLink(matches[0].id);
+        }}
+      />
+      {#each matches as p (p.id)}
+        <button class="choice" class:on={linked.includes(p.id)} onclick={() => toggleLink(p.id)}>
+          <b>{p.id}</b>
+          <span class="ptext">{p.text}</span>
+        </button>
+      {:else}
+        <p class="muted">No principle matches.</p>
+      {/each}
     </div>
   {/if}
 
@@ -276,6 +358,59 @@
   }
   .why {
     color: var(--fg-muted);
+  }
+  .linked {
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .linked li,
+  .choice {
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    font-size: 11px;
+    min-width: 0;
+  }
+  .ptext {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-muted);
+    flex: 1;
+    min-width: 0;
+  }
+  .unlink {
+    padding: 0 4px;
+    color: var(--fg-faint);
+  }
+  .picker {
+    margin-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .picker input {
+    font-size: 12px;
+    margin-bottom: 2px;
+  }
+  .choice {
+    text-align: left;
+    padding: 2px 4px;
+    border-radius: 4px;
+  }
+  .choice.on {
+    background: color-mix(in srgb, var(--author-color) 18%, transparent);
+  }
+  .link {
+    margin-left: auto;
+    padding: 2px 6px;
+  }
+  .link + .comment {
+    margin-left: 0;
   }
   .comment {
     margin-left: auto;

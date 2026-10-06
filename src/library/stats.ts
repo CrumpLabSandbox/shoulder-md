@@ -1,5 +1,6 @@
 /** Per-document numbers and metadata shown in the document list and the library view. */
-import type { DocMeta, State } from '../model/types';
+import type { DocMeta, GuideMeta, State } from '../model/types';
+import { parsePrinciples, type Principle } from '../guides/principles';
 import { markedRanges, text as viewText } from '../model/views';
 import { displayTitle } from '../docs/title';
 import { countWords } from '../util/text';
@@ -16,6 +17,12 @@ export type DocStats = {
   status: DocMeta['status'];
   tags: string[];
   libraryEligible: boolean;
+  /** The genre guide's document id, if any. */
+  genre?: string;
+  /** Explicit Claude access, if set; otherwise the genre's default applies. */
+  claude?: boolean;
+  /** Set on style guides, with their parsed principles. */
+  guide?: GuideMeta & { principles: Principle[]; unnumbered: number };
 };
 
 export function docStats(state: State): DocStats {
@@ -45,5 +52,16 @@ export function docStats(state: State): DocStats {
     status: state.meta.status,
     tags: state.meta.tags,
     libraryEligible: state.meta.libraryEligible,
+    ...(state.meta.genre ? { genre: state.meta.genre } : {}),
+    ...(state.meta.claude !== undefined ? { claude: state.meta.claude } : {}),
+    ...(state.meta.guide ? { guide: guideStats(state.meta.guide, clean) } : {}),
   };
+}
+
+function guideStats(
+  meta: GuideMeta,
+  clean: string,
+): GuideMeta & { principles: Principle[]; unnumbered: number } {
+  const parsed = parsePrinciples(clean);
+  return { ...meta, principles: parsed.principles, unnumbered: parsed.unnumbered.length };
 }

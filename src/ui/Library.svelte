@@ -82,9 +82,54 @@
     );
   }
 
-  async function update(id: string, patch: Partial<Omit<DocMeta, 'title'>>) {
+  async function update(
+    id: string,
+    patch: Partial<Pick<DocMeta, 'status' | 'tags' | 'libraryEligible'>>,
+  ) {
     entries = entries.map((e) => (e.id === id ? { ...e, ...patch } : e));
     await ws.setDocMeta(id, patch);
+  }
+
+  const ask = (message: string) => window.confirm(message);
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+  async function reload() {
+    entries = await ws.libraryEntries();
+  }
+
+  async function chooseGenre(id: string, select: HTMLSelectElement) {
+    const before = entries.find((e) => e.id === id)?.genre ?? '';
+    if (await ws.setGenre(id, select.value || null, ask)) await reload();
+    else select.value = before;
+  }
+
+  async function chooseClaude(id: string, select: HTMLSelectElement) {
+    const e = entries.find((x) => x.id === id);
+    const before = e?.claude === undefined ? 'follow' : e.claude ? 'on' : 'off';
+    const v = select.value;
+    if (await ws.setClaude(id, v === 'follow' ? null : v === 'on', ask)) await reload();
+    else select.value = before;
+  }
+
+  async function togglePrivate(genreId: string, box: HTMLInputElement) {
+    if (await ws.setGenrePrivate(genreId, box.checked, ask)) await reload();
+    else box.checked = !box.checked;
+  }
+
+  let newGenre = $state('');
+  let newGenrePrivate = $state(false);
+
+  async function addGenre() {
+    if (!newGenre.trim()) return;
+    const id = await ws.createGenre(newGenre, newGenrePrivate);
+    newGenre = '';
+    newGenrePrivate = false;
+    if (id) onclose();
+  }
+
+  async function openBase() {
+    await ws.openBaseGuide();
+    onclose();
   }
 
   function parseTags(s: string): string[] {
@@ -184,6 +229,54 @@
     </label>
   </div>
 
+  <div class="panel guides" aria-label="Style guides">
+    <div class="guides-head">
+      <h2>Style guides</h2>
+      <button onclick={openBase}
+        >{ws.baseGuide
+          ? `Open the base guide (${ws.baseGuide.guide?.principles.length ?? 0})`
+          : 'Create the base guide'}</button
+      >
+    </div>
+    <p class="hint">
+      The base guide holds principles for all your writing. A genre adds its own and can replace
+      base ones. A private genre keeps Claude off its documents by default.
+    </p>
+    {#if ws.genres.length > 0}
+      <ul class="genres">
+        {#each ws.genres as g (g.id)}
+          <li>
+            <button class="open" onclick={() => onopen(g.id)}>{g.title}</button>
+            <span class="muted"
+              >{g.guide?.prefix} · {plural(g.guide?.principles.length ?? 0, 'principle')} · {plural(
+                entries.filter((e) => e.genre === g.id).length,
+                'document',
+              )}</span
+            >
+            <label class="check"
+              ><input
+                type="checkbox"
+                checked={!!g.guide?.private}
+                onchange={(e) => void togglePrivate(g.id, e.currentTarget)}
+              /> Private</label
+            >
+          </li>
+        {/each}
+      </ul>
+    {/if}
+    <form
+      class="new-genre"
+      onsubmit={(e) => {
+        e.preventDefault();
+        void addGenre();
+      }}
+    >
+      <input type="text" placeholder="New genre, e.g. Papers" bind:value={newGenre} />
+      <label class="check"><input type="checkbox" bind:checked={newGenrePrivate} /> Private</label>
+      <button type="submit" disabled={!newGenre.trim()}>Create genre</button>
+    </form>
+  </div>
+
   {#if loading}
     <p class="empty">Loading…</p>
   {:else if rows.length === 0}
@@ -196,6 +289,8 @@
           <th>Document</th>
           <th>Status</th>
           <th>Tags</th>
+          <th>Genre</th>
+          <th title="Whether Claude Code may read the document">Claude</th>
           <th class="num" title="Accepted / rejected / pending tracked changes">Changes</th>
           <th class="num" title="Tracked changes with a reason">Reasons</th>
           <th class="num">Words</th>
@@ -241,6 +336,42 @@
                   if (e.key === 'Enter') e.currentTarget.blur();
                 }}
               />
+            </td>
+            <td>
+              {#if r.guide}
+                <span class="muted">{r.guide.role === 'base' ? 'Base guide' : 'Genre guide'}</span>
+              {:else}
+                <select
+                  value={r.genre ?? ''}
+                  aria-label="Genre of {r.title}"
+                  onchange={(e) => void chooseGenre(r.id, e.currentTarget)}
+                >
+                  <option value="">None</option>
+                  {#each ws.genres as g (g.id)}
+                    <option value={g.id}>{g.title}</option>
+                  {/each}
+                  {#if r.genre && !ws.genres.some((g) => g.id === r.genre)}
+                    <option value={r.genre}>Deleted genre</option>
+                  {/if}
+                </select>
+              {/if}
+            </td>
+            <td>
+              <select
+                class="claude"
+                class:off={!ws.claudeAllowed(r)}
+                value={r.claude === undefined ? 'follow' : r.claude ? 'on' : 'off'}
+                aria-label="Claude access for {r.title}"
+                onchange={(e) => void chooseClaude(r.id, e.currentTarget)}
+              >
+                <option value="follow"
+                  >Default ({ws.claudeAllowed({ genre: r.genre, guide: r.guide })
+                    ? 'on'
+                    : 'off'})</option
+                >
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
             </td>
             <td class="num">
               <span class="acc" title="Accepted">{r.acceptedChanges}</span> /
@@ -407,6 +538,54 @@
     color: var(--danger);
   }
   .empty {
+    color: var(--fg-muted);
+  }
+  .guides-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  h2 {
+    margin: 0;
+    font-size: 15px;
+  }
+  .guides-head button,
+  .new-genre button {
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+  }
+  .hint {
+    margin: 0;
+    color: var(--fg-muted);
+    font-size: 12px;
+  }
+  .genres {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .genres li {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+  .muted {
+    color: var(--fg-muted);
+    font-size: 12px;
+  }
+  .new-genre {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .new-genre input[type='text'] {
+    flex: 1;
+    max-width: 280px;
+  }
+  .claude.off {
     color: var(--fg-muted);
   }
 </style>

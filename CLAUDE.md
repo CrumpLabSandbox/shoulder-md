@@ -2,7 +2,7 @@
 
 A browser Markdown editor with Word-style tracked changes and comments, built on a sentence-level JSON model that records every edit and its reason. `plan.md` is the spec and roadmap; read its status line and the current phase before starting work. `idea.json` is the original seed.
 
-Status: phases 0–6 are built (editor, model and op log, tracked changes, comments, exports, edits library, folder sync), plus nested insert/delete marks. Next is phase 7, style guides and genres; Claude works through Claude Code on the synced folder, never a browser API key (see `plan.md` §9, §10 and §13).
+Status: phases 0–7 are built (editor, model and op log, tracked changes, comments, exports, edits library, folder sync, style guides with genres and the Claude switch), plus nested insert/delete marks. Next is phase 8, the principle inbox; Claude works through Claude Code on the synced folder, never a browser API key (see `plan.md` §9, §10 and §13).
 
 ## Commands
 
@@ -30,6 +30,7 @@ src/persist/   IndexedDB op log + snapshots; debounced autosave.
 src/export/    Markdown/CriticMarkup, JSON (+ schema.json), docx, print/PDF.
 src/library/   Change-record dataset (records.ts) and per-document stats (stats.ts).
 src/folder/    Folder sync engine (sync.ts), text → tracked edits (merge.ts), File System Access surface (fs.ts).
+src/guides/    Style guide principles: parsing `[ID]` list items, numbering, base + genre resolution.
 src/ui/        Svelte components. App.svelte wires shortcuts and layout.
 src/settings/  Fonts catalog and appearance settings (localStorage).
 tests/         vitest. tests/helpers/model.ts is the model test harness.
@@ -55,7 +56,7 @@ tests/         vitest. tests/helpers/model.ts is the model test harness.
 
 ### Persistence
 
-IndexedDB v3: `docs` (header + hashed snapshot), `ops` (keyed `[docId, seq]`), and `folder` (the folder handle, file records, tombstones). Load = snapshot + tail replay; a bad hash triggers a full replay. Phase 0 raw-text docs migrate via an `import` op. Snapshots every 200 ops / 30 s and when a document is closed.
+IndexedDB v3: `docs` (header + hashed snapshot), `ops` (keyed `[docId, seq]`), and `folder` (the shared and private folder handles, their file records under `rec:` / `prec:`, tombstones). Load = snapshot + tail replay; a bad hash triggers a full replay. Phase 0 raw-text docs migrate via an `import` op. Snapshots every 200 ops / 30 s and when a document is closed.
 
 ## Conventions and gotchas
 
@@ -65,6 +66,7 @@ IndexedDB v3: `docs` (header + hashed snapshot), `ops` (keyed `[docId, seq]`), a
 - Keyboard: ⌘⌥ chords are matched on `e.code` (Alt changes `e.key` on some layouts). Undo/redo keys are handled in a `keydown` DOM handler, not the keymap.
 - Prettier formats `.svelte` files and reflows code; do not assume an exact earlier layout when patching a file by string match.
 - `plan.md` and `idea.json` are excluded from Prettier on purpose.
+- Claude access: `claudeAllowed(meta)` in the workspace is the one rule (explicit `claude`, else genre default; a missing genre means off). A document is written only to the folder its access picks, and any access change goes through `changeAccess()` so files move and the user confirms first. Never write a Claude-off document to the shared folder.
 - Folder writes are debounced per document and `park()` flushes them before switching documents. Only raise an outside-change prompt when the browser has not moved on since the copy being written; otherwise the next write applies browser-wins.
 - Opening IndexedDB by hand in tests: `openDB('shoulder-md')` with no version, so tests keep working when the schema version goes up.
 - The `.docx` exporter is dynamically imported so it stays out of the main bundle.

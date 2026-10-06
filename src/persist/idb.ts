@@ -9,7 +9,7 @@
  * state; a mismatch means the cache is suspect and the whole log is replayed instead.
  */
 import { openDB, type DBSchema, type IDBPDatabase, type IDBPTransaction } from 'idb';
-import type { Document, Op, State } from '../model/types';
+import type { DocMeta, Document, Op, State } from '../model/types';
 import { SCHEMA_VERSION } from '../model/types';
 import { applyOp, createDocument, replay } from '../model/apply';
 import { hashState } from '../model/hash';
@@ -125,6 +125,7 @@ export async function createDoc(init: {
   author: string;
   tracking?: boolean;
   libraryEligible?: boolean;
+  meta?: Partial<DocMeta>;
 }): Promise<Document> {
   const doc = createDocument({
     text: init.text,
@@ -132,6 +133,7 @@ export async function createDoc(init: {
     author: init.author,
     tracking: init.tracking,
     libraryEligible: init.libraryEligible,
+    meta: init.meta,
   });
   const d = await db();
   const tx = d.transaction(['docs', 'ops'], 'readwrite');
@@ -286,29 +288,38 @@ export async function storageEstimate(): Promise<{ usage: number; quota: number 
 
 /* ---------- folder sync state ---------- */
 
+/** 'shared' is the folder Claude Code may work in; 'private' holds documents with Claude off. */
+export type FolderKind = 'shared' | 'private';
+
 export type FolderRoot = { handle: DirHandleLike; name: string; connectedAt: string };
 
-export async function getFolderRoot(): Promise<FolderRoot | undefined> {
-  return (await (await db()).get('folder', 'root')) as FolderRoot | undefined;
+const ROOT_KEY: Record<FolderKind, string> = { shared: 'root', private: 'privateRoot' };
+const REC_PREFIX: Record<FolderKind, string> = { shared: 'rec:', private: 'prec:' };
+
+export async function getFolderRoot(kind: FolderKind = 'shared'): Promise<FolderRoot | undefined> {
+  return (await (await db()).get('folder', ROOT_KEY[kind])) as FolderRoot | undefined;
 }
 
-export async function setFolderRoot(root: FolderRoot | undefined): Promise<void> {
+export async function setFolderRoot(
+  root: FolderRoot | undefined,
+  kind: FolderKind = 'shared',
+): Promise<void> {
   const d = await db();
-  if (root) await d.put('folder', root, 'root');
-  else await d.delete('folder', 'root');
+  if (root) await d.put('folder', root, ROOT_KEY[kind]);
+  else await d.delete('folder', ROOT_KEY[kind]);
 }
 
-/** Forgets which files belong to which documents (e.g. when the folder changes). */
-export async function clearFolderRecords(): Promise<void> {
+/** Forgets which files belong to which documents in one folder (e.g. when it changes). */
+export async function clearFolderRecords(kind: FolderKind = 'shared'): Promise<void> {
   const d = await db();
   const tx = d.transaction('folder', 'readwrite');
   for (const key of await tx.store.getAllKeys()) {
-    if (String(key).startsWith('rec:')) await tx.store.delete(key);
+    if (String(key).startsWith(REC_PREFIX[kind])) await tx.store.delete(key);
   }
   await tx.done;
 }
 
-/** Ids of documents deleted in the browser, so their files in the folder are not re-imported. */
+/** Ids of documents deleted in the browser, so their files in a folder are not re-imported. */
 export async function getTombstones(): Promise<string[]> {
   return ((await (await db()).get('folder', 'tombstones')) as string[] | undefined) ?? [];
 }
@@ -319,16 +330,19 @@ export async function addTombstone(id: string): Promise<void> {
   if (!list.includes(id)) await d.put('folder', [...list, id], 'tombstones');
 }
 
-/** File records in IndexedDB. */
-export function idbFolderStore(): FolderStore {
+/** File records for one folder, in IndexedDB. */
+export function idbFolderStore(kind: FolderKind = 'shared'): FolderStore {
+  const prefix = REC_PREFIX[kind];
   return {
     get: async (docId) =>
-      (await (await db()).get('folder', `rec:${docId}`)) as FileRecord | undefined,
-    put: async (record) => void (await (await db()).put('folder', record, `rec:${record.docId}`)),
+      (await (await db()).get('folder', `${prefix}${docId}`)) as FileRecord | undefined,
+    put: async (record) =>
+      void (await (await db()).put('folder', record, `${prefix}${record.docId}`)),
     all: async () => {
       const d = await db();
-      const keys = (await d.getAllKeys('folder')).filter((k) => String(k).startsWith('rec:'));
+      const keys = (await d.getAllKeys('folder')).filter((k) => String(k).startsWith(prefix));
       return Promise.all(keys.map(async (k) => (await d.get('folder', k)) as FileRecord));
     },
+    delete: async (docId) => void (await (await db()).delete('folder', `${prefix}${docId}`)),
   };
 }

@@ -7,6 +7,7 @@ import type {
   ChangeRecord,
   CommentAnchor,
   CommentThread,
+  DocMeta,
   Document,
   Effect,
   Op,
@@ -253,6 +254,19 @@ export function applyOp(state: State, op: Op, ctx: ApplyContext = {}): Applied {
       return { state: { ...state, changes }, op, inverse: [] };
     }
 
+    case 'set_principles': {
+      const rec = state.changes[op.changeId];
+      if (!rec) throw new ModelError(`set_principles: unknown change ${op.changeId}`);
+      const next = { ...rec };
+      if (op.principles.length) next.principles = [...op.principles];
+      else delete next.principles;
+      return {
+        state: { ...state, changes: { ...state.changes, [op.changeId]: next } },
+        op,
+        inverse: [],
+      };
+    }
+
     case 'comment_add': {
       const thread: CommentThread = {
         id: op.threadId,
@@ -297,8 +311,14 @@ export function applyOp(state: State, op: Op, ctx: ApplyContext = {}): Applied {
     case 'set_tracking':
       return { state: { ...state, trackingOn: op.on }, op, inverse: [] };
 
-    case 'set_meta':
-      return { state: { ...state, meta: { ...state.meta, ...op.patch } }, op, inverse: [] };
+    case 'set_meta': {
+      const meta: Record<string, unknown> = { ...state.meta };
+      for (const [k, v] of Object.entries(op.patch)) {
+        if (v === null) delete meta[k];
+        else if (v !== undefined) meta[k] = v;
+      }
+      return { state: { ...state, meta: meta as DocMeta }, op, inverse: [] };
+    }
   }
 }
 
@@ -417,6 +437,8 @@ export type CreateOptions = {
   tracking?: boolean;
   /** Include in the edits library (default false). */
   libraryEligible?: boolean;
+  /** Other metadata to set at creation (genre, guide, ...). */
+  meta?: Partial<DocMeta>;
   idGen?: IdGen;
 };
 
@@ -433,7 +455,7 @@ export function createDocument(opts: CreateOptions): Document {
   const applied = applyOp(emptyState(), importOp, { idGen });
   const ops: Op[] = [applied.op];
   let state = applied.state;
-  if (opts.title || opts.libraryEligible) {
+  if (opts.title || opts.libraryEligible || (opts.meta && Object.keys(opts.meta).length)) {
     const metaOp: Op = {
       id: idGen(),
       type: 'set_meta',
@@ -442,6 +464,7 @@ export function createDocument(opts: CreateOptions): Document {
       patch: {
         ...(opts.title ? { title: opts.title } : {}),
         ...(opts.libraryEligible ? { libraryEligible: true } : {}),
+        ...(opts.meta ?? {}),
       },
     };
     state = applyOp(state, metaOp, { idGen }).state;
