@@ -40,6 +40,11 @@
         "text": { "type": "string" },
         "changeId": { "type": "string" },
         "author": { "type": "string" },
+        "inserted": {
+          "type": "object",
+          "required": ["changeId", "author"],
+          "properties": { "changeId": { "type": "string" }, "author": { "type": "string" } }
+        },
         "sentenceId": { "type": "string" },
         "blockId": { "type": "string" }
       }

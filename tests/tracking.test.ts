@@ -177,3 +177,37 @@ describe('diffChange', () => {
 
 // Keep Transaction referenced for the userEvent helper types.
 void Transaction;
+
+describe('bufferChangesFor with deleted insertions', () => {
+  it('mirrors each decision', () => {
+    const setup = () => {
+      const h = harness('ab');
+      h.edit(1, 1, 'XY', { changeId: 'A', author: 'alice' });
+      h.edit(1, 2, '', { changeId: 'B', author: 'bob' });
+      return h;
+    };
+    const cases: [string, 'accept' | 'reject', string[]][] = [
+      ['reject B keeps the text as an insertion', 'reject', ['B']],
+      ['accept A keeps the text as a deletion', 'accept', ['A']],
+      ['accept B removes X', 'accept', ['B']],
+      ['reject A removes XY', 'reject', ['A']],
+    ];
+    const got = cases.map(([, type, ids]) => {
+      const h = setup();
+      const before = h.state;
+      const op = type === 'accept' ? h.accept(...ids) : h.reject(...ids);
+      const changes = bufferChangesFor(before, op);
+      // Applying the buffer changes to the old text must give the model's new revision text.
+      let t = 'aXYb';
+      for (const c of [...changes].reverse()) t = t.slice(0, c.from) + c.insert + t.slice(c.to);
+      expect(t).toBe(h.rev());
+      return changes;
+    });
+    expect(got).toEqual([
+      [],
+      [],
+      [{ from: 1, to: 2, insert: '' }],
+      [{ from: 1, to: 3, insert: '' }],
+    ]);
+  });
+});

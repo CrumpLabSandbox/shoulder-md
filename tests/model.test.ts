@@ -149,13 +149,30 @@ describe('tracked edits', () => {
     ]);
   });
 
-  it("turns another author's insertion into a deletion", () => {
+  it("turns another author's insertion into a deletion that remembers the insertion", () => {
     const h = harness('ab');
     h.edit(1, 1, 'X', { changeId: 'c1', author: 'alice' });
     h.edit(1, 2, '', { changeId: 'c2', author: 'bob' });
     expect(h.rev()).toBe('aXb');
-    expect(markedRanges(h.state)[0]).toMatchObject({ kind: 'del', changeId: 'c2', author: 'bob' });
+    expect(h.state.blocks[0]!.sentences[0]!.spans[1]).toEqual({
+      kind: 'del',
+      text: 'X',
+      changeId: 'c2',
+      author: 'bob',
+      inserted: { changeId: 'c1', author: 'alice' },
+    });
+    expect(markedRanges(h.state).map((r) => [r.kind, r.changeId, r.from, r.to, r.deleted])).toEqual(
+      [
+        ['ins', 'c1', 1, 2, true],
+        ['del', 'c2', 1, 2, undefined],
+      ],
+    );
     expect(h.clean()).toBe('ab');
+    expect(h.original()).toBe('ab');
+    expect(pendingChanges(h.state).map((c) => [c.id, c.before, c.after])).toEqual([
+      ['c1', '', 'X'],
+      ['c2', 'X', ''],
+    ]);
   });
 
   it('keeps sentence ids across accept of a boundary deletion', () => {
@@ -437,5 +454,88 @@ describe('commentRanges', () => {
       to: 6,
       orphaned: false,
     });
+  });
+});
+
+describe("deleted insertions (one author deletes another's pending insertion)", () => {
+  // alice inserts "XY" between a and b; bob deletes "X" of it.
+  function setup() {
+    const h = harness('ab');
+    h.edit(1, 1, 'XY', { changeId: 'A', author: 'alice' });
+    h.edit(1, 2, '', { changeId: 'B', author: 'bob' });
+    return h;
+  }
+  const marks = (h: ReturnType<typeof harness>) =>
+    markedRanges(h.state).map((r) => `${r.kind}:${r.changeId}:${h.rev().slice(r.from, r.to)}`);
+
+  it('rejecting the deletion gives the insertion back', () => {
+    const h = setup();
+    h.reject('B');
+    expect(h.rev()).toBe('aXYb');
+    expect(marks(h)).toEqual(['ins:A:XY']);
+    h.reject('A');
+    expect(h.rev()).toBe('ab');
+  });
+
+  it('accepting the deletion removes the text; the rest of the insertion stays pending', () => {
+    const h = setup();
+    h.accept('B');
+    expect(h.rev()).toBe('aYb');
+    expect(marks(h)).toEqual(['ins:A:Y']);
+    expect(h.state.changes['B']).toMatchObject({ status: 'accepted', before: 'X', after: '' });
+  });
+
+  it('accepting the insertion leaves a plain deletion', () => {
+    const h = setup();
+    h.accept('A');
+    expect(h.rev()).toBe('aXYb');
+    expect(marks(h)).toEqual(['del:B:X']);
+    expect(h.state.changes['A']).toMatchObject({ status: 'accepted', after: 'XY' });
+    expect(h.original()).toBe('aXYb');
+    expect(h.clean()).toBe('aYb');
+  });
+
+  it('rejecting the insertion removes all of it, including the deleted part', () => {
+    const h = setup();
+    h.reject('A');
+    expect(h.rev()).toBe('ab');
+    expect(marks(h)).toEqual([]);
+  });
+
+  it('deciding both at once removes the text either way', () => {
+    const a = setup();
+    a.accept('A', 'B');
+    expect(a.rev()).toBe('aYb');
+    const r = setup();
+    r.reject('A', 'B');
+    expect(r.rev()).toBe('ab');
+  });
+
+  it('every decision undoes exactly', () => {
+    for (const [kind, ids] of [
+      ['accept', ['A']],
+      ['accept', ['B']],
+      ['reject', ['A']],
+      ['reject', ['B']],
+      ['accept', ['A', 'B']],
+    ] as const) {
+      const h = setup();
+      const before = JSON.stringify(h.state.blocks.map((b) => b.sentences.map((s) => s.spans)));
+      if (kind === 'accept') h.accept(...ids);
+      else h.reject(...ids);
+      h.applyOps(h.inverse);
+      expect(JSON.stringify(h.state.blocks.map((b) => b.sentences.map((s) => s.spans)))).toBe(
+        before,
+      );
+      expect(h.state.changes['A']!.status).toBe('pending');
+      expect(h.state.changes['B']!.status).toBe('pending');
+    }
+  });
+
+  it('a third author leaves a deleted insertion alone', () => {
+    const h = setup();
+    h.edit(1, 2, '', { changeId: 'C', author: 'carol' });
+    expect(marks(h)).toEqual(['ins:A:X', 'del:B:X', 'ins:A:Y']);
+    expect(h.original()).toBe('ab');
   });
 });

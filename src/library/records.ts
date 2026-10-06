@@ -7,7 +7,8 @@
  */
 import type { Block, ChangeRecord, Document, Op, Span, State } from '../model/types';
 import { applyOp, emptyState } from '../model/apply';
-import { absoluteToPos, posToAbsolute } from '../model/views';
+import { absoluteToPos, posToAbsolute, spanVisible, markedRanges } from '../model/views';
+import { resolveSpan } from '../model/spans';
 import { displayTitle } from '../docs/title';
 import { text as viewText } from '../model/views';
 
@@ -75,13 +76,12 @@ const ENDS_SENTENCE = /[.!?…:]["'”’)\]*]*$/;
  * deletions kept), and `changeId` shown as `side`.
  */
 function render(spans: Span[], changeId: string | undefined, side: 'before' | 'after'): string {
+  const only = new Set(changeId ? [changeId] : []);
   let t = '';
   for (const sp of spans) {
-    if (changeId && sp.changeId === changeId) {
-      if (side === 'before' ? sp.kind !== 'ins' : sp.kind !== 'del') t += sp.text;
-    } else if (sp.kind !== 'ins') {
-      t += sp.text;
-    }
+    // Decide this change one way, then show everything else as it originally was.
+    const r = changeId ? resolveSpan(sp, only, side === 'after' ? 'accept' : 'reject') : sp;
+    if (r && spanVisible(r, 'original')) t += sp.text;
   }
   return t;
 }
@@ -92,7 +92,9 @@ const tidy = (s: string) => s.replace(/\s+/g, ' ').trim();
 export function captureChange(state: State, changeId: string): Capture | undefined {
   const all = sentencesOf(state);
   const idx = all
-    .map((s, i) => (s.spans.some((sp) => sp.changeId === changeId) ? i : -1))
+    .map((s, i) =>
+      s.spans.some((sp) => sp.changeId === changeId || sp.inserted?.changeId === changeId) ? i : -1,
+    )
     .filter((i) => i >= 0);
   if (idx.length === 0) return undefined;
   const first = idx[0]!;
@@ -164,12 +166,14 @@ export function changeRecords(doc: Document, opts: RecordOptions = {}): ChangeRo
   const final = doc.state;
   const title = displayTitle(final.meta.title, viewText(final, 'clean'));
   const rows: ChangeRow[] = [];
+  const live = new Set(markedRanges(final).map((r) => r.changeId));
   const records = Object.values(final.changes).sort((a, b) =>
     a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0,
   );
   for (const rec of records) {
     const outcome: Outcome = !rec.tracked ? 'untracked' : rec.status;
     if (outcome === 'pending' && !opts.includePending) continue;
+    if (outcome === 'pending' && !live.has(rec.id)) continue; // no marks left: nothing to review
     if (outcome === 'untracked' && !opts.includeUntracked) continue;
     const capture =
       (outcome === 'pending'
@@ -210,6 +214,7 @@ function textsOf(rec: ChangeRecord, state: State): { before: string; after: stri
   for (const b of state.blocks)
     for (const s of b.sentences)
       for (const sp of s.spans) {
+        if (sp.inserted?.changeId === rec.id) after += sp.text;
         if (sp.changeId !== rec.id) continue;
         if (sp.kind === 'del') before += sp.text;
         if (sp.kind === 'ins') after += sp.text;

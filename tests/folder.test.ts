@@ -247,11 +247,8 @@ describe('text → tracked edits', () => {
             state = applyOp(state, build(state)!).state;
           }
           expect(viewText(state, 'clean')).toBe(target);
-          // Known model limit (plan.md §13): deleting another author's pending insertion turns it
-          // into a plain deletion, so "original" is only guaranteed when no insertions are pending.
-          if (!markedRanges(h.state).some((r) => r.kind === 'ins')) {
-            expect(viewText(state, 'original')).toBe(original);
-          }
+          // Deleting another author's pending insertion keeps the insertion, so the original holds.
+          expect(viewText(state, 'original')).toBe(original);
         },
       ),
       { numRuns: 300 },

@@ -1,6 +1,6 @@
 /** Per-document numbers and metadata shown in the document list and the library view. */
 import type { DocMeta, State } from '../model/types';
-import { text as viewText } from '../model/views';
+import { markedRanges, text as viewText } from '../model/views';
 import { displayTitle } from '../docs/title';
 import { countWords } from '../util/text';
 
@@ -24,9 +24,12 @@ export function docStats(state: State): DocStats {
   let accepted = 0;
   let rejected = 0;
   let reasoned = 0;
+  // Pending means still marked in the text: a change whose marks all went away with another
+  // decision (say, a deletion of an insertion that was rejected) has nothing left to review.
+  const live = new Set(markedRanges(state).map((r) => r.changeId));
   for (const c of Object.values(state.changes)) {
     if (!c.tracked) continue;
-    if (c.status === 'pending') pending++;
+    if (c.status === 'pending') pending += live.has(c.id) ? 1 : 0;
     else if (c.status === 'accepted') accepted++;
     else rejected++;
     if (c.reason || (c.reasonTags?.length ?? 0) > 0) reasoned++;

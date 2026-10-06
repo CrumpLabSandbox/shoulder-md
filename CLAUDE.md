@@ -2,7 +2,7 @@
 
 A browser Markdown editor with Word-style tracked changes and comments, built on a sentence-level JSON model that records every edit and its reason. `plan.md` is the spec and roadmap; read its status line and the current phase before starting work. `idea.json` is the original seed.
 
-Status: phases 0–6 are built (editor, model and op log, tracked changes, comments, exports, edits library, folder sync). Next is phase 7, Claude as editor (see `plan.md` §9 and §10). A known model limit is listed in `plan.md` §13.
+Status: phases 0–6 are built (editor, model and op log, tracked changes, comments, exports, edits library, folder sync), plus nested insert/delete marks. Next is phase 7, Claude as editor (see `plan.md` §9 and §10).
 
 ## Commands
 
@@ -44,7 +44,8 @@ tests/         vitest. tests/helpers/model.ts is the model test harness.
 - One text primitive: `edit` (sentence-relative positions). Also `import`, `accept`, `reject`, `splice`, `set_reason`, comment ops, `set_tracking`, `set_meta`.
 - **Every text op returns its inverse** as `splice` ops. Undo/redo run through the model, not CodeMirror history. Do not reintroduce CodeMirror's `history()`.
 - Comment anchors are carried through each op by an `OffsetMap`. A thread whose text vanishes becomes orphaned (`anchor: null`, `orphanedFrom` kept) and re-anchors if undo brings the sentences back. Never delete threads.
-- Tracked deletions keep text in place; an author deleting their own pending insertion removes it outright (Word behaviour).
+- Tracked deletions keep text in place; an author deleting their own pending insertion removes it outright (Word behaviour). Deleting **another** author's pending insertion gives a `del` span with `inserted: { changeId, author }`, so both marks survive.
+- **Every accept/reject decision goes through `resolveSpan`** (`src/model/spans.ts`): the model, buffer sync, the dataset's before/after sentences, and anything new must use it rather than re-deriving rules from `kind`. A span can belong to two changes; use `changeIdsOf(span)` and copy marks with `marksOf(span)` so `inserted` is never dropped.
 
 ### Editor ↔ model
 

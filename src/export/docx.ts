@@ -26,6 +26,8 @@ import {
   TableRow,
   TextRun,
   WidthType,
+  XmlAttributeComponent,
+  XmlComponent,
   type IParagraphOptions,
   type IRunOptions,
   type ParagraphChild,
@@ -123,7 +125,30 @@ function inlineStyles(text: string, kind: Block['kind']): CharStyle[] {
   return styles;
 }
 
-type Rev = { kind: 'text' | 'ins' | 'del'; author: string; date: string };
+type Rev = {
+  kind: 'text' | 'ins' | 'del';
+  author: string;
+  date: string;
+  /** On a deletion: the text was a pending insertion by this author at this time. */
+  inserted?: { author: string; date: string };
+};
+
+class RevisionAttributes extends XmlAttributeComponent<{
+  id: number;
+  author: string;
+  date: string;
+}> {
+  protected override readonly xmlKeys = { id: 'w:id', author: 'w:author', date: 'w:date' };
+}
+
+/** Word's form for inserted-then-deleted text: <w:ins><w:del><w:r><w:delText/></w:r></w:del></w:ins>. */
+class InsertedDeletion extends XmlComponent {
+  constructor(ins: { id: number; author: string; date: string }, deletion: DeletedTextRun) {
+    super('w:ins');
+    this.root.push(new RevisionAttributes(ins));
+    this.root.push(deletion);
+  }
+}
 
 let revisionCounter = 0;
 
@@ -146,8 +171,20 @@ function makeRun(
   const name = authors.find((a) => a.id === rev.author)?.name ?? rev.author;
   if (rev.kind === 'ins')
     return new InsertedTextRun({ ...base, id: ++revisionCounter, author: name, date: rev.date });
-  if (rev.kind === 'del')
-    return new DeletedTextRun({ ...base, id: ++revisionCounter, author: name, date: rev.date });
+  if (rev.kind === 'del') {
+    const del = new DeletedTextRun({
+      ...base,
+      id: ++revisionCounter,
+      author: name,
+      date: rev.date,
+    });
+    if (!rev.inserted) return del;
+    const insName = authors.find((a) => a.id === rev.inserted!.author)?.name ?? rev.inserted.author;
+    return new InsertedDeletion(
+      { id: ++revisionCounter, author: insName, date: rev.inserted.date },
+      del,
+    ) as unknown as ParagraphChild;
+  }
   const run = new TextRun(base);
   if (style.link) return new ExternalHyperlink({ children: [run], link: style.link });
   return run;
@@ -298,6 +335,14 @@ export function buildDocx(doc: Document, opts: DocxOptions = {}): DocxDocument {
           kind: span.kind,
           author: span.author ?? doc.ops[0]?.author ?? 'unknown',
           date: (span.changeId && state.changes[span.changeId]?.ts) || doc.updatedAt,
+          ...(span.inserted
+            ? {
+                inserted: {
+                  author: span.inserted.author,
+                  date: state.changes[span.inserted.changeId]?.ts || doc.updatedAt,
+                },
+              }
+            : {}),
         };
         let buf = '';
         let bufStyle: CharStyle | undefined;

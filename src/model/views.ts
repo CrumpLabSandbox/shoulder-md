@@ -6,7 +6,8 @@ export type View = 'revision' | 'clean' | 'original';
 export function spanVisible(span: Span, view: View): boolean {
   if (view === 'revision') return true;
   if (view === 'clean') return span.kind !== 'del';
-  return span.kind !== 'ins';
+  // Original: no insertions, including insertions someone has since deleted.
+  return span.kind === 'text' || (span.kind === 'del' && !span.inserted);
 }
 
 export function text(state: State, view: View = 'revision'): string {
@@ -80,6 +81,8 @@ export type MarkedRange = {
   changeId: string;
   author: string;
   sentenceId: string;
+  /** On an insertion: someone has since deleted this inserted text (pending). */
+  deleted?: true;
 };
 
 /** Absolute ranges of every pending insertion and deletion, in revision coordinates. */
@@ -90,6 +93,19 @@ export function markedRanges(state: State): MarkedRange[] {
     for (const s of b.sentences)
       for (const sp of s.spans) {
         if (sp.kind !== 'text') {
+          // A deleted insertion carries two marks over the same text: the insertion under it
+          // first, then the deletion.
+          if (sp.inserted) {
+            out.push({
+              from: pos,
+              to: pos + sp.text.length,
+              kind: 'ins',
+              changeId: sp.inserted.changeId,
+              author: sp.inserted.author,
+              sentenceId: s.id,
+              deleted: true,
+            });
+          }
           out.push({
             from: pos,
             to: pos + sp.text.length,

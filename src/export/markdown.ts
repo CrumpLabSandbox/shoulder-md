@@ -5,8 +5,8 @@
  * CriticMarkup: {++inserted++}  {--deleted--}  {~~old~>new~~}  {==highlight==}{>>comment<<}
  */
 import type { Author, CommentThread, Document, Op, Span, State } from '../model/types';
-import { flatten, sameMark, type Tagged } from '../model/spans';
-import { commentRanges, text as viewText, type View } from '../model/views';
+import { flatten, marksOf, sameMark, type Tagged } from '../model/spans';
+import { commentRanges, spanVisible, text as viewText, type View } from '../model/views';
 import { appendOp, createDocument } from '../model/apply';
 import { absoluteToPos } from '../model/views';
 import { ulid } from '../model/ids';
@@ -22,8 +22,8 @@ function mergedSpans(state: State): Span[] {
     const last = out[out.length - 1];
     if (last && sameMark(last, s)) last.text += s.text;
     else {
-      const { kind, text, changeId, author } = s;
-      out.push({ kind, text, ...(changeId ? { changeId } : {}), ...(author ? { author } : {}) });
+      const { kind, text } = s;
+      out.push({ kind, text, ...marksOf(s) });
     }
   }
   return out;
@@ -94,7 +94,16 @@ export function exportCriticMarkup(state: State, opts: CriticOptions = {}): stri
     if (s.kind === 'text' && notes.has(pos)) notes.delete(pos);
     if (highlights.some((h) => h.from === pos) && s.kind === 'text') out += '{==';
     const next = spans[i + 1];
-    if (s.kind === 'ins' && next?.kind === 'del' && next.changeId === s.changeId) {
+    if (s.kind === 'del' && s.inserted) {
+      // Inserted, then deleted by someone else: a deletion wrapping an insertion.
+      out += `{--{++${s.text}++}--}`;
+      pos += s.text.length;
+    } else if (
+      s.kind === 'ins' &&
+      next?.kind === 'del' &&
+      !next.inserted &&
+      next.changeId === s.changeId
+    ) {
       out += `{~~${next.text}~>${s.text}~~}`;
       pos += s.text.length + next.text.length;
       i++;
@@ -170,7 +179,24 @@ export function parseCriticMarkup(src: string, author = 'imported'): ParsedCriti
     } else if (m[2] !== undefined) {
       const id = ulid();
       changeIds.push(id);
-      mark('del', m[2], id);
+      const nested = /^\{\+\+([\s\S]*)\+\+\}$/.exec(m[2]);
+      if (nested) {
+        // {--{++text++}--}: an insertion that has since been deleted.
+        const insId = ulid();
+        changeIds.push(insId);
+        if (nested[1]) {
+          spans.push({
+            kind: 'del',
+            text: nested[1],
+            changeId: id,
+            author,
+            inserted: { changeId: insId, author },
+          });
+          pos += nested[1].length;
+        }
+      } else {
+        mark('del', m[2], id);
+      }
       lastHighlight = undefined;
     } else if (m[3] !== undefined) {
       const id = ulid();
@@ -216,7 +242,7 @@ export function documentFromCriticMarkup(
   const parsed = parseCriticMarkup(src, opts.author);
   const ts = opts.ts ?? new Date().toISOString();
   const original = parsed.spans
-    .filter((s) => s.kind !== 'ins')
+    .filter((s) => spanVisible(s, 'original'))
     .map((s) => s.text)
     .join('');
   let doc = createDocument({

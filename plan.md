@@ -165,8 +165,11 @@ type Sentence = {
 type Span =
   | { kind: 'text'; text: string }                           // accepted, plain
   | { kind: 'ins'; text: string; changeId: string }          // pending insertion
-  | { kind: 'del'; text: string; changeId: string };         // pending deletion
+  | { kind: 'del'; text: string; changeId: string;           // pending deletion
+      inserted?: { changeId: string; author: string } };    // ...of someone's pending insertion
 ```
+
+A deletion of another author's pending insertion keeps both marks, as Word nests `w:del` inside `w:ins`. The two changes resolve independently (`resolveSpan` in `src/model/spans.ts`): rejecting the deletion gives the insertion back, accepting the insertion leaves a plain deletion, and accepting the deletion or rejecting the insertion removes the text. The text is hidden in both clean and original views.
 
 Three texts derive from a sentence's spans:
 
@@ -183,7 +186,7 @@ Every op has `id`, `author`, and `ts`. Text-affecting ops also carry `alloc` (th
 | Op | Payload | Effect |
 |---|---|---|
 | `import` | text | Sets the whole document, untracked. The first op of every document; also the resync safety net |
-| `edit` | changeId, from, to (positions: sentenceId + offset in that sentence's revision text), insert, tracked | The one text primitive. Tracked: plain text in the range becomes `del`, the author's own pending `ins` in the range vanishes outright (Word behavior), another author's `ins` becomes `del`, and the insertion becomes `ins`. Untracked: the range is removed and the insertion is plain text |
+| `edit` | changeId, from, to (positions: sentenceId + offset in that sentence's revision text), insert, tracked | The one text primitive. Tracked: plain text in the range becomes `del`, the author's own pending `ins` in the range vanishes outright (Word behavior), another author's `ins` becomes a `del` that remembers the insertion (`inserted`), and the insertion becomes `ins`. Untracked: the range is removed and the insertion is plain text |
 | `accept` | changeIds | `ins` → text; `del` spans removed |
 | `reject` | changeIds | `ins` spans removed; `del` → text |
 | `splice` | from, to (absolute revision offsets), spans, records? | Raw replacement of a range with the given spans, marks included, then restore the given change records. The inverse of every other text op; how undo and redo are logged |
@@ -441,9 +444,9 @@ Settled on 2026-10-05, after the first draft of this plan:
 5. `libraryEligible` defaults to off per document, with a per-library default that can be flipped.
 6. Name stays `shoulder-md`.
 
-Known model limits:
+Resolved after phase 6:
 
-- When one author deletes another author's pending insertion, the text becomes a plain pending deletion and no longer remembers it was an insertion. "Original" view and reject-all then show that text, and accepting the first author's change is no longer possible on its own. Word keeps both marks on such text. The fix is a span that can carry an insertion and a deletion at once; it touches views, accept/reject, exports and the dataset, so it is scheduled separately. Folder sync makes this easier to hit, because disk edits are a second author.
+- Deleting another author's pending insertion used to turn it into a plain deletion, losing the insertion, so "Original" view and reject-all showed text that was never in the original. Spans now carry both marks (see §4). Property tests with three authors check that accept-all gives the clean text, reject-all gives the original, and any mix of decisions gives the same text in any order. CriticMarkup writes such text as `{--{++text++}--}`, Word export nests `w:del` inside `w:ins`, and a change whose marks all disappear with another decision (a deletion of an insertion that was rejected) no longer counts as pending.
 
 Still open:
 

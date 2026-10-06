@@ -14,12 +14,21 @@ export type Author = { id: string; name: string; color?: string };
 
 export type SpanKind = 'text' | 'ins' | 'del';
 
+/** A pending insertion, as carried by a deletion of inserted text. */
+export type InsertMark = { changeId: string; author: string };
+
 export type Span = {
   kind: SpanKind;
   text: string;
   /** Present on 'ins' and 'del' spans: the tracked change this span belongs to. */
   changeId?: string;
   author?: string;
+  /**
+   * Only on 'del' spans: the text was itself a pending insertion when it was deleted (one
+   * author deleting another's insertion, as Word does with nested w:ins/w:del). The two changes
+   * resolve independently; see `resolveSpan`.
+   */
+  inserted?: InsertMark;
 };
 
 export type Sentence = { id: string; spans: Span[] };

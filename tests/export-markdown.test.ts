@@ -202,3 +202,53 @@ describe('JSON export and import', () => {
     expect(textOf(flatten(back.state.blocks))).toBe('abc');
   });
 });
+
+describe('deleted insertions in exports', () => {
+  it('CriticMarkup writes a deletion around an insertion and reads it back', () => {
+    const h = harness('ab');
+    h.edit(1, 1, 'XY', { changeId: 'A', author: 'alice' });
+    h.edit(1, 2, '', { changeId: 'B', author: 'bob' });
+    const md = exportCriticMarkup(h.state, { comments: false });
+    expect(md).toBe('a{--{++X++}--}{++Y++}b');
+    const back = documentFromCriticMarkup(md, { author: 'imp' });
+    expect(viewText(back.state, 'revision')).toBe('aXYb');
+    expect(viewText(back.state, 'clean')).toBe('aYb');
+    expect(viewText(back.state, 'original')).toBe('ab');
+    const span = flatten(back.state.blocks).find((s) => s.text === 'X')!;
+    expect(span.kind).toBe('del');
+    expect(span.inserted?.changeId).toBeTruthy();
+  });
+
+  it('the CriticMarkup round trip holds with several authors', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom('One. Two.', 'Plain text here.\n\n- a\n- b\n', ''),
+        fc.array(
+          fc.record({
+            a: fc.nat(40),
+            b: fc.nat(40),
+            insert: fc.constantFrom('', ' ', 'x', 'Hello world. '),
+            author: fc.constantFrom('alice', 'bob'),
+          }),
+          { maxLength: 8 },
+        ),
+        (initial, edits) => {
+          const h = harness(initial);
+          edits.forEach((e, i) => {
+            const len = h.rev().length;
+            const a = Math.min(e.a, e.b, len);
+            const b = Math.min(Math.max(e.a, e.b), len);
+            h.edit(a, b, e.insert, { tracked: true, changeId: `c${i}`, author: e.author });
+          });
+          const back = documentFromCriticMarkup(exportCriticMarkup(h.state, { comments: false }), {
+            author: 'imp',
+          });
+          expect(viewText(back.state, 'revision')).toBe(h.rev());
+          expect(viewText(back.state, 'clean')).toBe(h.clean());
+          expect(viewText(back.state, 'original')).toBe(h.original());
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
+});

@@ -21,7 +21,75 @@ export function textOf(spans: readonly Span[]): string {
 }
 
 export function sameMark(a: Span, b: Span): boolean {
-  return a.kind === b.kind && a.changeId === b.changeId && a.author === b.author;
+  return (
+    a.kind === b.kind &&
+    a.changeId === b.changeId &&
+    a.author === b.author &&
+    a.inserted?.changeId === b.inserted?.changeId &&
+    a.inserted?.author === b.inserted?.author
+  );
+}
+
+/** The changes a span belongs to: its own, and for a deleted insertion, the insertion too. */
+export function changeIdsOf(s: Span): string[] {
+  const ids: string[] = [];
+  if (s.kind !== 'text' && s.changeId) ids.push(s.changeId);
+  if (s.inserted) ids.push(s.inserted.changeId);
+  return ids;
+}
+
+/** The marks of a span, as plain fields (for copying into new span objects). */
+export function marksOf(s: Span): Pick<Span, 'changeId' | 'author' | 'inserted'> {
+  return {
+    ...(s.changeId !== undefined ? { changeId: s.changeId } : {}),
+    ...(s.author !== undefined ? { author: s.author } : {}),
+    ...(s.inserted !== undefined ? { inserted: { ...s.inserted } } : {}),
+  };
+}
+
+/**
+ * What a span becomes when the given changes are accepted or rejected: a new span, the span
+ * unchanged, or null when its text goes away.
+ *
+ * - ins: accept → text; reject → gone.
+ * - del: accept → gone; reject → text.
+ * - del of an insertion (A inserted, B deleted): deciding B: accept → gone, reject → A's
+ *   insertion again. Deciding A: accept → B's plain deletion, reject → gone. Deciding both at
+ *   once → gone either way (inserted then deleted, or never inserted).
+ */
+export function resolveSpan<T extends Span>(
+  s: T,
+  ids: ReadonlySet<string>,
+  decision: 'accept' | 'reject',
+): T | null {
+  if (s.kind === 'text') return s;
+  const own = !!s.changeId && ids.has(s.changeId);
+  if (s.kind === 'ins') {
+    if (!own) return s;
+    return decision === 'accept' ? stripMarks(s, 'text') : null;
+  }
+  const ins = !!s.inserted && ids.has(s.inserted.changeId);
+  if (!own && !ins) return s;
+  if (!s.inserted) return decision === 'accept' ? null : stripMarks(s, 'text');
+  if (own && ins) return null;
+  if (own) {
+    if (decision === 'accept') return null;
+    const { inserted, ...rest } = s;
+    return { ...rest, kind: 'ins', changeId: inserted.changeId, author: inserted.author } as T;
+  }
+  // Deciding the insertion only.
+  if (decision === 'reject') return null;
+  const { inserted: _i, ...rest } = s;
+  void _i;
+  return rest as T;
+}
+
+function stripMarks<T extends Span>(s: T, kind: 'text'): T {
+  const { changeId: _c, author: _a, inserted: _i, ...rest } = s;
+  void _c;
+  void _a;
+  void _i;
+  return { ...rest, kind } as T;
 }
 
 /** Drops empty spans and merges adjacent spans with the same mark and origin. */
@@ -117,7 +185,16 @@ export function editSpans<T extends Span & { sentenceId: string; blockId: string
         removedOutright += s.text;
       } else {
         deleted += s.text;
-        out.push({ ...s, kind: 'del', changeId: mark.changeId, author: mark.author });
+        // Another author's pending insertion: keep it as a deletion that remembers the insertion.
+        out.push({
+          ...s,
+          kind: 'del',
+          changeId: mark.changeId,
+          author: mark.author,
+          ...(s.kind === 'ins' && s.changeId && s.author
+            ? { inserted: { changeId: s.changeId, author: s.author } }
+            : {}),
+        });
       }
     } else {
       out.push(s);
@@ -163,8 +240,8 @@ export function toSentence(id: string, spans: Tagged[]): Sentence {
   return {
     id,
     spans: normalize(
-      spans.map(({ kind, text, changeId, author }) =>
-        stripUndefined({ kind, text, changeId, author }),
+      spans.map(({ kind, text, changeId, author, inserted }) =>
+        stripUndefined({ kind, text, changeId, author, inserted }),
       ),
     ),
   };
@@ -254,19 +331,11 @@ export function resolveSpans<T extends Span & { sentenceId: string; blockId: str
   const segments: MapSegment[] = [];
   for (const s of spans) {
     const len = s.text.length;
-    if (s.kind !== 'text' && s.changeId && changeIds.has(s.changeId)) {
-      const vanish = decision === 'accept' ? s.kind === 'del' : s.kind === 'ins';
-      if (vanish) {
-        segments.push({ oldLen: len, newLen: 0, identity: false });
-        continue;
-      }
-      const { changeId: _c, author: _a, ...rest } = s;
-      void _c;
-      void _a;
-      out.push({ ...rest, kind: 'text' } as T);
-      segments.push({ oldLen: len, newLen: len, identity: true });
+    const r = resolveSpan(s, changeIds, decision);
+    if (r === null) {
+      segments.push({ oldLen: len, newLen: 0, identity: false });
     } else {
-      out.push(s);
+      out.push(r);
       segments.push({ oldLen: len, newLen: len, identity: true });
     }
   }
@@ -292,8 +361,7 @@ export function rangeSpans<T extends Span & { sentenceId: string; blockId: strin
       out.push({
         kind: s.kind,
         text: s.text,
-        ...(s.changeId !== undefined ? { changeId: s.changeId } : {}),
-        ...(s.author !== undefined ? { author: s.author } : {}),
+        ...marksOf(s),
         sentenceId: s.sentenceId,
         blockId: s.blockId,
       });
@@ -323,8 +391,7 @@ export function spliceSpans(
       out.push({
         kind: r.kind,
         text: r.text,
-        ...(r.changeId !== undefined ? { changeId: r.changeId } : {}),
-        ...(r.author !== undefined ? { author: r.author } : {}),
+        ...marksOf(r),
         sentenceId: r.sentenceId ?? '',
         blockId: r.blockId ?? '',
       });

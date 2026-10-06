@@ -4,8 +4,8 @@
  * (accept, reject, undo, redo, and later Claude's proposals).
  */
 import type { Op, State } from '../model/types';
-import { flatten, keptText, textOf } from '../model/spans';
-import { markedRanges, posToAbsolute } from '../model/views';
+import { flatten, keptText, resolveSpan, textOf } from '../model/spans';
+import { posToAbsolute } from '../model/views';
 import type { TextChange } from './tracking';
 
 export function bufferChangesFor(before: State, op: Op): TextChange[] {
@@ -23,11 +23,20 @@ export function bufferChangesFor(before: State, op: Op): TextChange[] {
     }
     case 'accept':
     case 'reject': {
+      // The same rule the model applies: spans that resolve to nothing leave the buffer.
       const ids = new Set(op.changeIds);
-      const vanish = op.type === 'accept' ? 'del' : 'ins';
-      return markedRanges(before)
-        .filter((r) => r.kind === vanish && ids.has(r.changeId))
-        .map((r) => ({ from: r.from, to: r.to, insert: '' }));
+      const out: TextChange[] = [];
+      let pos = 0;
+      for (const s of flatten(before.blocks)) {
+        const end = pos + s.text.length;
+        if (resolveSpan(s, ids, op.type) === null) {
+          const last = out[out.length - 1];
+          if (last && last.to === pos) last.to = end;
+          else out.push({ from: pos, to: end, insert: '' });
+        }
+        pos = end;
+      }
+      return out;
     }
     case 'splice':
       return [{ from: op.from, to: op.to, insert: op.spans.map((s) => s.text).join('') }];

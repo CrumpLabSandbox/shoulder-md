@@ -176,6 +176,56 @@ describe('model properties', () => {
     );
   });
 
+  it('any mix of decisions gives the same text whatever order they are made in', () => {
+    fc.assert(
+      fc.property(
+        initialArb,
+        fc.array(
+          fc.record({
+            a: fc.nat(40),
+            b: fc.nat(40),
+            insert: insertArb,
+            author: fc.constantFrom('alice', 'bob', 'carol'),
+          }),
+          { minLength: 1, maxLength: 8 },
+        ),
+        fc.array(fc.boolean(), { minLength: 8, maxLength: 8 }),
+        fc.integer(),
+        (initial, edits, accepts, seed) => {
+          const mk = () => {
+            const h = harness(initial);
+            edits.forEach((e, i) => {
+              const len = h.rev().length;
+              const a = Math.min(e.a, e.b, len);
+              const b = Math.min(Math.max(e.a, e.b), len);
+              h.edit(a, b, e.insert, { tracked: true, changeId: `c${i}`, author: e.author });
+            });
+            return h;
+          };
+          const ids = Object.keys(mk().state.changes);
+          const decide = (h: ReturnType<typeof harness>, order: string[]) => {
+            for (const id of order) {
+              const i = Number(id.slice(1));
+              if (accepts[i % accepts.length]) h.accept(id);
+              else h.reject(id);
+            }
+            return h;
+          };
+          const forward = decide(mk(), ids);
+          // A deterministic shuffle of the same decisions.
+          const shuffled = ids
+            .map((id, i) => ({ id, k: Math.imul(seed ^ (i + 1), 2654435761) >>> 0 }))
+            .sort((x, y) => x.k - y.k)
+            .map((x) => x.id);
+          const other = decide(mk(), shuffled);
+          expect(other.rev()).toBe(forward.rev());
+          expect(markedRanges(forward.state)).toEqual([]);
+        },
+      ),
+      { numRuns: 300 },
+    );
+  });
+
   it('clean text of untracked edits equals the plain string result', () => {
     fc.assert(
       fc.property(
@@ -203,18 +253,24 @@ describe('model properties', () => {
     fc.assert(
       fc.property(
         initialArb,
-        fc.array(fc.record({ a: fc.nat(40), b: fc.nat(40), insert: insertArb }), {
-          minLength: 1,
-          maxLength: 10,
-        }),
+        fc.array(
+          fc.record({
+            a: fc.nat(40),
+            b: fc.nat(40),
+            insert: insertArb,
+            author: fc.constantFrom('alice', 'bob', 'carol'),
+          }),
+          { minLength: 1, maxLength: 10 },
+        ),
         (initial, edits) => {
+          // Several authors, so edits land on each other's pending insertions.
           const mk = () => {
             const h = harness(initial);
             edits.forEach((e, i) => {
               const len = h.rev().length;
               const a = Math.min(e.a, e.b, len);
               const b = Math.min(Math.max(e.a, e.b), len);
-              h.edit(a, b, e.insert, { tracked: true, changeId: `c${i}` });
+              h.edit(a, b, e.insert, { tracked: true, changeId: `c${i}`, author: e.author });
             });
             return h;
           };

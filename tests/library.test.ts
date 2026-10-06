@@ -189,3 +189,26 @@ describe('docStats', () => {
     expect(createDocument({ author: 'a' }).state.meta.libraryEligible).toBe(false);
   });
 });
+
+describe('records with deleted insertions', () => {
+  it('credits the inserted text to its inserter and isolates each change', () => {
+    const h = harness('Results were clear.');
+    const at = h.rev().indexOf(' clear');
+    h.edit(at, at, ' very', { changeId: 'A', author: 'alice' });
+    const v = h.rev().indexOf(' very');
+    h.edit(v, v + 5, '', { changeId: 'B', author: 'bob' });
+    const rows = changeRecords(h.doc, { includePending: true });
+    expect(
+      rows.map((r) => [r.changeId, r.before, r.after, r.sentenceBefore, r.sentenceAfter]),
+    ).toEqual([
+      ['A', '', ' very', 'Results were clear.', 'Results were very clear.'],
+      ['B', ' very', '', 'Results were clear.', 'Results were clear.'],
+    ]);
+    h.reject('A');
+    // A is a decided row; B's marks went away with A's rejection, so it has nothing to review.
+    expect(
+      changeRecords(h.doc, { includePending: true }).map((r) => [r.changeId, r.outcome]),
+    ).toEqual([['A', 'rejected']]);
+    expect(docStats(h.state).pendingChanges).toBe(0);
+  });
+});

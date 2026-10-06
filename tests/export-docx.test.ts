@@ -87,3 +87,25 @@ describe('Word export', () => {
     expect(empty.document).toContain('<w:body>');
   });
 });
+
+describe('Word export of deleted insertions', () => {
+  it('nests the deletion inside the insertion, as Word does', async () => {
+    const h = harness('Keep ab here.');
+    h.edit(6, 6, 'XY', { changeId: 'A', author: 'alice' });
+    h.edit(6, 7, '', { changeId: 'B', author: 'bob' });
+    const out = await unzip(
+      await exportDocxBuffer(h.doc, {
+        authors: [
+          { id: 'alice', name: 'Alice' },
+          { id: 'bob', name: 'Bob' },
+        ],
+      }),
+    );
+    expect(out.document).toMatch(
+      /<w:ins [^>]*w:author="Alice"[^>]*><w:del [^>]*w:author="Bob"[^>]*><w:r>(<w:rPr\/>)?<w:delText[^>]*>X<\/w:delText>/,
+    );
+    expect(out.document).toMatch(
+      /<w:ins [^>]*w:author="Alice"[^>]*><w:r>(<w:rPr\/>)?<w:t[^>]*>Y<\/w:t>/,
+    );
+  });
+});

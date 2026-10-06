@@ -18,7 +18,9 @@ import { reconcile } from './reconcile';
 import {
   editSpansMapped,
   flatten,
+  changeIdsOf,
   rangeSpans,
+  resolveSpan,
   resolveSpans,
   spliceSpans,
   textOf,
@@ -140,9 +142,15 @@ export function applyOp(state: State, op: Op, ctx: ApplyContext = {}): Applied {
       const before = new Map<string, string>();
       const after = new Map<string, string>();
       for (const s of flat) {
-        if (s.kind === 'text' || !s.changeId || !ids.has(s.changeId)) continue;
-        const m = s.kind === 'del' ? before : after;
-        m.set(s.changeId, (m.get(s.changeId) ?? '') + s.text);
+        if (s.kind === 'text') continue;
+        // A deletion removed this text; a deleted insertion also counts as its inserter's text.
+        if (s.changeId && ids.has(s.changeId)) {
+          const m = s.kind === 'del' ? before : after;
+          m.set(s.changeId, (m.get(s.changeId) ?? '') + s.text);
+        }
+        if (s.inserted && ids.has(s.inserted.changeId)) {
+          after.set(s.inserted.changeId, (after.get(s.inserted.changeId) ?? '') + s.text);
+        }
       }
       const anchors = captureAnchors(state);
       // Inverse: restore each run of affected spans, later runs first so earlier offsets hold.
@@ -151,10 +159,10 @@ export function applyOp(state: State, op: Op, ctx: ApplyContext = {}): Applied {
         let newPos = 0;
         let run: (typeof runs)[number] | undefined;
         for (const s of flat) {
-          const affected = s.kind !== 'text' && !!s.changeId && ids.has(s.changeId);
+          const affected = changeIdsOf(s).some((id) => ids.has(id));
           const len = s.text.length;
           if (affected) {
-            const vanish = op.type === 'accept' ? s.kind === 'del' : s.kind === 'ins';
+            const vanish = resolveSpan(s, ids, op.type) === null;
             if (!run) runs.push((run = { newFrom: newPos, newLen: 0, spans: [] }));
             run.spans.push(s);
             if (!vanish) {

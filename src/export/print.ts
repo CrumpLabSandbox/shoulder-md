@@ -46,7 +46,12 @@ export function printHtml(state: State, mode: PrintMode, authors: readonly Autho
   for (const s of merged) {
     const tag = s.kind === 'ins' ? 'ins' : s.kind === 'del' ? 'del' : undefined;
     const title = s.author ? ` title="${escapeHtml(name(s.author))}"` : '';
-    if (tag) {
+    if (tag && s.inserted) {
+      const insTitle = ` title="${escapeHtml(name(s.inserted.author))}"`;
+      src += `<ins${insTitle}><del${title}>${s.text}</del></ins>`;
+      pos += s.text.length;
+      src += marksAt(pos);
+    } else if (tag) {
       src += `<${tag}${title}>${s.text}</${tag}>`;
       pos += s.text.length;
       src += marksAt(pos);
