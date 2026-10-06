@@ -4,7 +4,7 @@ A browser-based Markdown editor that is growing Word-style tracked changes and c
 
 ## Status
 
-Phases 0 to 5 of the plan: a Markdown writing app with Word-style tracked changes and comments, on a sentence-level document model and op log, with exports and an edits library.
+Phases 0 to 6 of the plan: a Markdown writing app with Word-style tracked changes and comments, on a sentence-level document model and op log, with exports, an edits library, and sync to a local folder.
 
 - CodeMirror 6 editor with Markdown highlighting and a rendered preview (editor, split, or preview layouts).
 - Background autosave to the browser's IndexedDB on every change, with flushes on blur, tab hide, and unload.
@@ -15,6 +15,7 @@ Phases 0 to 5 of the plan: a Markdown writing app with Word-style tracked change
 - Comments: select text and press ⌘⌥C to open a thread in the margin, with replies, resolve and reopen, and threads attached to a change. Anchors follow the text through edits and undo; a thread whose text is removed is kept and marked as orphaned.
 - Exports: Markdown (clean, original, or with changes as CriticMarkup), Word with real tracked changes and threaded comments, the full JSON with its op log, and PDF through the print dialog. Markdown, CriticMarkup, and JSON files import as new documents.
 - Library (⌘⌥L): choose which documents join the edits library, set their status and tags, search them, and export every change as JSON lines with its sentence before and after, neighbouring sentences, reason, discussion, and whether it was accepted or rejected. Nothing joins the library unless you include it.
+- Folder sync (Chrome and Edge): "Save to a folder…" in the status bar mirrors every document into a folder, such as a git repo, as `.md` and `.shoulder.json`, about a second after each save. Edits made to those files by other tools come back as tracked changes you can accept or reject; if both sides changed, your version wins and the disk version is kept as a `.conflict-` file.
 
 Tracked changes, comments, exports, the edits library, and Claude as an editor come in later phases.
 

@@ -2,7 +2,7 @@
 
 A browser-based Markdown editor with Word-style tracked changes and comments, built on a structured JSON layer that records every edit and the reason for it. Exports to Markdown, Word, PDF, or the full JSON. Over time, a library of edited documents whose history can teach Claude to edit the way this writer edits.
 
-Status: phases 0 to 5 built (writing app with autosave, fonts and preview; sentence-level model and op log; Word-style tracked changes with reasons, accept/reject, views, and model-level undo; comment threads in the same margin; exports to Markdown, CriticMarkup, Word, JSON and PDF, with CriticMarkup and JSON import; the edits library with its JSONL change-record export). This document is the spec for v1 and the roadmap after it.
+Status: phases 0 to 6 built (writing app with autosave, fonts and preview; sentence-level model and op log; Word-style tracked changes with reasons, accept/reject, views, and model-level undo; comment threads in the same margin; exports to Markdown, CriticMarkup, Word, JSON and PDF, with CriticMarkup and JSON import; the edits library with its JSONL change-record export; folder sync to a local directory or git repo). This document is the spec for v1 and the roadmap after it.
 
 ---
 
@@ -252,7 +252,10 @@ Design: the op log is append-only, so saving means appending new ops. Each op is
 - **Multi-tab**: a `BroadcastChannel` lock per document. A second tab opening the same document gets it read-only with a "Take over" button.
 - **Named versions**: the user can name the current point ("sent to reviewer"). This is a `set_meta`-style marker op; nothing is copied.
 - **Storage quota**: request `navigator.storage.persist()` and show usage in settings.
-- **Later, local folder**: with the File System Access API the same debounced writer also writes `<title>.md` (clean text) and `<title>.shoulder.json` (full document) into a chosen folder, so a git repo and Claude Code see current files at all times. Writes go through a temp file and rename where possible. Conflict rule: the browser copy wins unless the file on disk changed and the browser did not, in which case the user is asked.
+- **Local folder (built in phase 6)**: with the File System Access API (Chrome and Edge), every document is mirrored to a chosen folder as `<name>.md` (clean text) and `<name>.shoulder.json` (the full document with its op log), about a second after each save, so a git repo and Claude Code see current files. Names come from the title once and then stay put. Writes use `createWritable()`, which writes a swap file and replaces the original on close. The folder handle is remembered in IndexedDB; on reload the folder reconnects by itself if the browser still allows it, and otherwise the status bar offers "Reconnect".
+  - Outside changes are found by polling the open document's files every two seconds and on window focus, comparing modification time and size with what was last written.
+  - Conflict rule: the browser copy wins unless the files changed on disk and the browser did not, in which case the user is asked. An edited `.md` loads as tracked changes by "Edited on disk" (a word-level diff turned into `edit` ops, so it can be reviewed and undone); a `.shoulder.json` whose log extends ours loads the new ops; a different history can replace the document. When both changed, the disk version is saved as `<name>.conflict-<time>.md|.shoulder.json` before being overwritten, and a notice says so.
+  - Connecting a folder imports any `*.shoulder.json` documents the browser does not have, so a second machine or browser picks up the same library. Deleting a document in the browser leaves its files alone and records a tombstone so they are not re-imported.
 
 ---
 
@@ -386,9 +389,11 @@ Each phase ends with something usable. Phases 0 and 1 overlap in time.
 - Metadata edits on documents that are not open go straight to the stored op log as `set_meta` ops with a fresh snapshot.
 - Done: the export from a few edited documents is clean enough to hand to a Claude skill; each record isolates one change with its sentence, neighbours, reason and outcome.
 
-### Phase 6: Local folder storage (1 week)
-- File System Access API, `.md` plus `.shoulder.json` written continuously, reconnect on reload, conflict rule.
-- Done when: a git repo folder stays in sync while writing.
+### Phase 6: Local folder storage (built)
+- "Save to a folder…" in the status bar or Settings → Folder; the status bar then shows the folder, or "Reconnect" when the browser needs permission again. Details in §5.
+- `src/folder/`: `sync.ts` (the engine: stable names, change detection, browser-wins backups, scan and import), `merge.ts` (text → tracked edit ops via a word-level Myers diff), `fs.ts` (the API surface, so tests use an in-memory folder).
+- Verified with unit tests against an in-memory folder, a property test that any target text is reached through tracked edits, and a browser run against a real directory handle from Chromium's origin-private file system: continuous writes, an outside `.md` edit loaded as tracked changes and undone, an op appended by another tool, both sides changing, reconnect on reload, and a fresh browser profile importing the folder.
+- Done: a git repo folder stays in sync while writing. This is also the transport phase 7 can use: Claude Code edits the `.md` (arriving as tracked changes) or appends ops to the `.shoulder.json`.
 
 ### Phase 7: Claude as editor (2 weeks)
 - Section 9. Pick a transport, build proposal → tracked changes, evaluation view.
@@ -435,6 +440,10 @@ Settled on 2026-10-05, after the first draft of this plan:
 4. Comment anchors may span sentences: an anchor is a list of sentence ids with a range in the first and last.
 5. `libraryEligible` defaults to off per document, with a per-library default that can be flipped.
 6. Name stays `shoulder-md`.
+
+Known model limits:
+
+- When one author deletes another author's pending insertion, the text becomes a plain pending deletion and no longer remembers it was an insertion. "Original" view and reject-all then show that text, and accepting the first author's change is no longer possible on its own. Word keeps both marks on such text. The fix is a span that can carry an insertion and a deletion at once; it touches views, accept/reject, exports and the dataset, so it is scheduled separately. Folder sync makes this easier to hit, because disk edits are a second author.
 
 Still open:
 

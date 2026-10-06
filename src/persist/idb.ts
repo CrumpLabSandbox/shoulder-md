@@ -16,6 +16,8 @@ import { hashState } from '../model/hash';
 import { ulid } from '../model/ids';
 import { text as viewText } from '../model/views';
 import { docStats, type DocStats } from '../library/stats';
+import type { FileRecord, FolderStore } from '../folder/sync';
+import type { DirHandleLike } from '../folder/fs';
 
 export type Snapshot = { state: State; opCount: number; hash: string; at: string };
 
@@ -35,12 +37,14 @@ type OpRow = { docId: string; seq: number; op: Op };
 type V1Doc = { id: string; title: string; text: string; createdAt: string; updatedAt: string };
 
 interface ShoulderDB extends DBSchema {
+  /** Folder sync: 'root' (the directory handle), 'tombstones', and 'rec:<docId>' file records. */
+  folder: { key: string; value: unknown };
   docs: { key: string; value: DocHeader; indexes: { 'by-updated': string } };
   ops: { key: [string, number]; value: OpRow; indexes: { 'by-doc': string } };
 }
 
 const DB_NAME = 'shoulder-md';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 /** Snapshot after this many ops since the last one, or after this much time. */
 export const SNAPSHOT_EVERY_OPS = 200;
@@ -60,12 +64,17 @@ function db(): Promise<IDBPDatabase<ShoulderDB>> {
         ops.createIndex('by-doc', 'docId');
         if (oldVersion === 1) await migrateV1(tx);
       }
+      if (oldVersion < 3) {
+        database.createObjectStore('folder');
+      }
     },
   });
   return dbPromise;
 }
 
-async function migrateV1(tx: IDBPTransaction<ShoulderDB, ('docs' | 'ops')[], 'versionchange'>) {
+async function migrateV1(
+  tx: IDBPTransaction<ShoulderDB, ('docs' | 'ops' | 'folder')[], 'versionchange'>,
+) {
   const docs = tx.objectStore('docs');
   const ops = tx.objectStore('ops');
   const old = (await docs.getAll()) as unknown as V1Doc[];
@@ -273,4 +282,53 @@ export async function storageEstimate(): Promise<{ usage: number; quota: number 
     // ignore
   }
   return undefined;
+}
+
+/* ---------- folder sync state ---------- */
+
+export type FolderRoot = { handle: DirHandleLike; name: string; connectedAt: string };
+
+export async function getFolderRoot(): Promise<FolderRoot | undefined> {
+  return (await (await db()).get('folder', 'root')) as FolderRoot | undefined;
+}
+
+export async function setFolderRoot(root: FolderRoot | undefined): Promise<void> {
+  const d = await db();
+  if (root) await d.put('folder', root, 'root');
+  else await d.delete('folder', 'root');
+}
+
+/** Forgets which files belong to which documents (e.g. when the folder changes). */
+export async function clearFolderRecords(): Promise<void> {
+  const d = await db();
+  const tx = d.transaction('folder', 'readwrite');
+  for (const key of await tx.store.getAllKeys()) {
+    if (String(key).startsWith('rec:')) await tx.store.delete(key);
+  }
+  await tx.done;
+}
+
+/** Ids of documents deleted in the browser, so their files in the folder are not re-imported. */
+export async function getTombstones(): Promise<string[]> {
+  return ((await (await db()).get('folder', 'tombstones')) as string[] | undefined) ?? [];
+}
+
+export async function addTombstone(id: string): Promise<void> {
+  const d = await db();
+  const list = ((await d.get('folder', 'tombstones')) as string[] | undefined) ?? [];
+  if (!list.includes(id)) await d.put('folder', [...list, id], 'tombstones');
+}
+
+/** File records in IndexedDB. */
+export function idbFolderStore(): FolderStore {
+  return {
+    get: async (docId) =>
+      (await (await db()).get('folder', `rec:${docId}`)) as FileRecord | undefined,
+    put: async (record) => void (await (await db()).put('folder', record, `rec:${record.docId}`)),
+    all: async () => {
+      const d = await db();
+      const keys = (await d.getAllKeys('folder')).filter((k) => String(k).startsWith('rec:'));
+      return Promise.all(keys.map(async (k) => (await d.get('folder', k)) as FileRecord));
+    },
+  };
 }

@@ -3,6 +3,7 @@
   import { PRESETS, type SettingsStore, type Theme } from '../settings/settings.svelte';
 
   import { AUTHOR_PALETTE } from '../docs/identity';
+  import type { FolderStatus } from '../docs/workspace.svelte';
   import type { Author } from '../model/types';
 
   let {
@@ -10,11 +11,19 @@
     author,
     onauthor,
     onclose,
+    folder,
+    onconnectfolder,
+    onreconnectfolder,
+    ondisconnectfolder,
   }: {
     store: SettingsStore;
     author: Author;
     onauthor: (a: Author) => void;
     onclose: () => void;
+    folder: FolderStatus;
+    onconnectfolder: () => void;
+    onreconnectfolder: () => void;
+    ondisconnectfolder: () => void;
   } = $props();
   const s = $derived(store.value);
 
@@ -147,6 +156,39 @@
   </section>
 
   <section>
+    <h3>Folder</h3>
+    {#if folder.status === 'unsupported'}
+      <p class="note">
+        Saving to a folder needs Chrome or Edge. Documents are still saved in this browser.
+      </p>
+    {:else}
+      <p class="note">
+        Mirror every document into a folder as <code>.md</code> and <code>.shoulder.json</code>, for
+        git or Claude Code. Edits made to those files elsewhere come back as tracked changes.
+      </p>
+      {#if folder.status === 'connected'}
+        <p class="note">Syncing to <b>{folder.name}</b>.</p>
+        <div class="row-buttons">
+          <button onclick={onconnectfolder}>Change folder…</button>
+          <button onclick={ondisconnectfolder}>Stop syncing</button>
+        </div>
+      {:else if folder.status === 'needs-permission' || folder.status === 'error'}
+        <p class="note">
+          “{folder.name}” needs your permission again{folder.status === 'error'
+            ? ` (${folder.error})`
+            : ''}.
+        </p>
+        <div class="row-buttons">
+          <button onclick={onreconnectfolder}>Reconnect</button>
+          <button onclick={ondisconnectfolder}>Stop syncing</button>
+        </div>
+      {:else}
+        <div class="row-buttons"><button onclick={onconnectfolder}>Choose a folder…</button></div>
+      {/if}
+    {/if}
+  </section>
+
+  <section>
     <h3>Changes</h3>
     <label class="row">
       <input
@@ -260,6 +302,19 @@
   }
   .sample {
     line-height: 1.4;
+  }
+  .note {
+    margin: 0;
+    font-size: 12px;
+    color: var(--fg-muted);
+    line-height: 1.45;
+  }
+  .row-buttons {
+    display: flex;
+    gap: 6px;
+  }
+  .row-buttons button {
+    border: 1px solid var(--border);
   }
   .swatches {
     display: flex;

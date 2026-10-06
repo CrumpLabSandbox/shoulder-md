@@ -7,9 +7,18 @@ import {
   libraryEntries as storedLibraryEntries,
   listDocs,
   loadDoc,
+  addTombstone,
+  clearFolderRecords,
+  getFolderRoot,
+  getTombstones,
+  idbFolderStore,
+  setFolderRoot,
   type DocSummary,
   type LibraryEntry,
 } from '../persist/idb';
+import { FolderSync, type External } from '../folder/sync';
+import { folderSupported, permissionOf, pickFolder, type DirHandleLike } from '../folder/fs';
+import { editsToMatch, type OpBuilder } from '../folder/merge';
 import { docStats } from '../library/stats';
 import { changeRecords, toJsonl, type RecordOptions } from '../library/records';
 import type { DocMeta } from '../model/types';
@@ -19,7 +28,7 @@ import { downloadBlob, downloadText, slugify } from '../export/download';
 import { printDocument, printHtml } from '../export/print';
 import { createAutosave, type SaveStatus } from '../persist/autosave';
 import { displayTitle } from './title';
-import { authorColor } from './identity';
+import { authorColor, DISK_AUTHOR } from './identity';
 import { nowIso, isoAt } from '../util/time';
 import type { Author, Document, Op } from '../model/types';
 import { appendOp, revisionText } from '../model/apply';
@@ -45,6 +54,21 @@ import { bufferChangesFor } from '../editor/sync';
 const LAST_DOC_KEY = 'shoulder-md:lastDoc';
 const UNDO_GROUP_MS = 500;
 const UNDO_LIMIT = 500;
+const FOLDER_WRITE_MS = 800;
+const FOLDER_POLL_MS = 2000;
+
+export type FolderStatus =
+  | { status: 'unsupported' }
+  | { status: 'none' }
+  | { status: 'needs-permission'; name: string }
+  | { status: 'connected'; name: string; lastWrite?: number }
+  | { status: 'error'; name: string; error: string };
+
+/** A change on disk the user has to decide about. */
+export type ExternalChange = {
+  docId: string;
+  ext: Exclude<External, { kind: 'none' } | { kind: 'missing' }>;
+};
 
 const WELCOME = `# Welcome to shoulder-md
 
@@ -137,6 +161,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     save: async ({ doc, ops, force }) => {
       await appendOps(doc, ops, { forceSnapshot: force });
       lastSavedAt = Date.now();
+      if (sync) folderWriter.schedule({ doc, force: false });
       docs = docs
         .map((d) =>
           d.id === doc.id ? { ...d, ...docStats(doc.state), updatedAt: doc.updatedAt } : d,
@@ -168,6 +193,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       await open(doc.id);
     }
     ready = true;
+    await restoreFolder();
   }
 
   /** Flush pending ops and write a snapshot of the open document before leaving it. */
@@ -175,6 +201,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     if (!current) return;
     autosave.schedule({ doc: current, ops: [], force: true });
     await autosave.flush();
+    await folderWriter.flush();
   }
 
   async function open(id: string) {
@@ -191,6 +218,8 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     canUndo = canRedo = false;
     safeSet(LAST_DOC_KEY, id);
     pushMarks();
+    if (external && external.docId !== id) external = undefined;
+    void poll();
   }
 
   async function create() {
@@ -210,6 +239,8 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       current = undefined;
     }
     await deleteDoc(id);
+    // Files in a connected folder are left alone, but must not come back on the next scan.
+    await addTombstone(id);
     await refreshList();
     if (wasCurrent) {
       if (docs[0]) await open(docs[0].id);
@@ -269,11 +300,13 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
    * Applies model-originated ops (accept, reject, undo, redo), mirrors them into the buffer,
    * and returns the combined inverse. Positions in later ops must be valid after earlier ones.
    */
-  function applyModelOps(ops: Op[], selection?: Selection): Op[] {
+  function applyModelOps(ops: (Op | OpBuilder)[], selection?: Selection): Op[] {
     if (!current) return [];
     const inverses: Op[][] = [];
     const applied: Op[] = [];
-    for (const op of ops) {
+    for (const item of ops) {
+      const op = typeof item === 'function' ? item(current.state) : item;
+      if (!op) continue;
       const before = current.state;
       const changes = bufferChangesFor(before, op);
       const r = push(op);
@@ -283,7 +316,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     }
     text = revisionText(current.state);
     if (selection) bridge?.setSelection(selection);
-    schedule(applied, ops[ops.length - 1]?.ts ?? nowIso());
+    schedule(applied, applied[applied.length - 1]?.ts ?? nowIso());
     lastEdit = undefined;
     pushMarks();
     return inverses.reverse().flat();
@@ -646,6 +679,232 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     await open(stored.id);
   }
 
+  /* ---------- folder sync ---------- */
+
+  let folder = $state.raw<FolderStatus>(
+    folderSupported() ? { status: 'none' } : { status: 'unsupported' },
+  );
+  let external = $state.raw<ExternalChange | undefined>(undefined);
+  let folderNotice = $state<string | undefined>(undefined);
+  let sync: FolderSync | undefined;
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
+  let polling = false;
+
+  type FolderBatch = { doc: Document; force: boolean };
+  const folderWriter = createAutosave<FolderBatch>({
+    delayMs: FOLDER_WRITE_MS,
+    save: async ({ doc, force }) => syncDoc(doc, force),
+    // Pending writes are always for the open document: park() flushes before switching.
+    merge: (a, b) => ({ doc: b.doc, force: a.force || b.force }),
+  });
+
+  /** Writes one document to the folder, or records the outside change it found. */
+  async function syncDoc(doc: Document, force = false): Promise<void> {
+    if (!sync || folder.status !== 'connected') return;
+    if (!force && external?.docId === doc.id) return; // waiting for the user to decide
+    try {
+      const r = await sync.write(doc, { force });
+      // Ask only if the browser has not moved on since this copy was queued. If it has, a newer
+      // write is on its way and will apply the rule: the browser wins, the disk copy is kept.
+      const movedOn =
+        !current || current.ops.length !== doc.ops.length || autosave.status !== 'saved';
+      if (r.external && doc.id === current?.id && !movedOn)
+        external = { docId: doc.id, ext: r.external };
+      if (r.backups.length) {
+        folderNotice = `The copy on disk had changed too, so it was saved as ${r.backups.join(' and ')} before your version was written.`;
+      }
+      if (r.written && folder.status === 'connected') folder = { ...folder, lastWrite: Date.now() };
+    } catch (e) {
+      folderFailed(e);
+    }
+  }
+
+  function folderFailed(e: unknown) {
+    const name = folder.status === 'none' || folder.status === 'unsupported' ? '' : folder.name;
+    stopPolling();
+    sync = undefined;
+    folder =
+      e instanceof Error && (e.name === 'NotAllowedError' || e.name === 'SecurityError')
+        ? { status: 'needs-permission', name }
+        : { status: 'error', name, error: e instanceof Error ? e.message : String(e) };
+  }
+
+  /** Starts syncing with a granted folder: imports its documents, then writes ours. */
+  async function activate(handle: DirHandleLike): Promise<void> {
+    sync = new FolderSync(handle, idbFolderStore());
+    folder = { status: 'connected', name: handle.name };
+    try {
+      const found = await sync.scan(
+        docs.map((d) => d.id),
+        await getTombstones(),
+      );
+      for (const d of found) await importDocument(d);
+      if (found.length) {
+        await refreshList();
+        folderNotice = `Added ${found.length} ${found.length === 1 ? 'document' : 'documents'} from “${handle.name}”.`;
+      }
+      await writeAll();
+      startPolling();
+    } catch (e) {
+      folderFailed(e);
+    }
+  }
+
+  async function writeAll(): Promise<void> {
+    await park();
+    for (const d of docs) {
+      const doc = current?.id === d.id ? current : (await loadDoc(d.id))?.doc;
+      if (doc) await syncDoc(doc);
+    }
+  }
+
+  /** On startup: use the remembered folder if the browser still allows it, else offer to reconnect. */
+  async function restoreFolder(): Promise<void> {
+    if (folder.status === 'unsupported') return;
+    const root = await getFolderRoot();
+    if (!root) return;
+    try {
+      const perm = await permissionOf(root.handle);
+      if (perm === 'granted') await activate(root.handle);
+      else folder = { status: 'needs-permission', name: root.name };
+    } catch (e) {
+      folder = {
+        status: 'error',
+        name: root.name,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
+
+  /** Picks a folder (from a click) and starts syncing every document to it. */
+  async function connectFolder(): Promise<void> {
+    let handle: DirHandleLike;
+    try {
+      handle = await pickFolder();
+    } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') return;
+      folderNotice = `Could not open the folder: ${e instanceof Error ? e.message : String(e)}`;
+      return;
+    }
+    stopPolling();
+    await clearFolderRecords();
+    await setFolderRoot({ handle, name: handle.name, connectedAt: nowIso() });
+    await activate(handle);
+  }
+
+  /** Asks the browser for permission again (needs a click) and resumes syncing. */
+  async function reconnectFolder(): Promise<void> {
+    const root = await getFolderRoot();
+    if (!root) return void (folder = { status: 'none' });
+    try {
+      const perm = await permissionOf(root.handle, true);
+      if (perm === 'granted') await activate(root.handle);
+      else folder = { status: 'needs-permission', name: root.name };
+    } catch (e) {
+      folder = {
+        status: 'error',
+        name: root.name,
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
+
+  async function disconnectFolder(): Promise<void> {
+    await folderWriter.flush();
+    stopPolling();
+    sync = undefined;
+    external = undefined;
+    await setFolderRoot(undefined);
+    await clearFolderRecords();
+    folder = { status: 'none' };
+  }
+
+  function startPolling() {
+    stopPolling();
+    pollTimer = setInterval(() => void poll(), FOLDER_POLL_MS);
+    globalThis.addEventListener?.('focus', onFocus);
+  }
+
+  function stopPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = undefined;
+    globalThis.removeEventListener?.('focus', onFocus);
+  }
+
+  function onFocus() {
+    void poll();
+  }
+
+  /** Looks for outside changes to the open document's files. */
+  async function poll(): Promise<void> {
+    const doc = current;
+    if (!sync || !doc || external || polling) return;
+    // Unsaved browser changes win anyway; the next write handles any conflict.
+    if (autosave.status !== 'saved' || folderWriter.status !== 'saved') return;
+    polling = true;
+    try {
+      const ext = await sync.check(doc);
+      if (current?.id !== doc.id || current.ops.length !== doc.ops.length) return;
+      if (ext.kind === 'missing') folderWriter.schedule({ doc, force: false });
+      else if (ext.kind !== 'none') external = { docId: doc.id, ext };
+    } catch (e) {
+      folderFailed(e);
+    } finally {
+      polling = false;
+    }
+  }
+
+  /**
+   * Settles an outside change. 'disk' takes it in: Markdown edits become tracked changes by
+   * "Edited on disk", new ops from another tool are appended, and a different history replaces
+   * the document. 'mine' keeps the browser version, saving the disk version as a conflict file.
+   */
+  async function resolveExternal(choice: 'disk' | 'mine'): Promise<void> {
+    const e = external;
+    external = undefined;
+    if (!e || !current || e.docId !== current.id) return;
+    if (choice === 'mine' || e.ext.kind === 'invalid') {
+      await syncDoc(current, true);
+      return;
+    }
+    if (e.ext.kind === 'md') {
+      const sel = bridge?.getSelection() ?? { anchor: 0, head: 0 };
+      const builders = editsToMatch(current.state, e.ext.text, {
+        author: DISK_AUTHOR,
+        ts: nowIso(),
+        id: ulid,
+      });
+      const inverse = applyModelOps(builders);
+      recordUndo({
+        ops: inverse,
+        before: sel,
+        after: bridge?.getSelection() ?? sel,
+        at: Date.now(),
+      });
+    } else if (e.ext.extendsLocal) {
+      const fresh = e.ext.doc.ops.slice(current.ops.length);
+      const sel = bridge?.getSelection() ?? { anchor: 0, head: 0 };
+      const inverse = applyModelOps(fresh);
+      recordUndo({
+        ops: inverse,
+        before: sel,
+        after: bridge?.getSelection() ?? sel,
+        at: Date.now(),
+      });
+    } else {
+      const id = current.id;
+      await autosave.flush();
+      current = undefined;
+      await deleteDoc(id);
+      await importDocument(e.ext.doc);
+      await refreshList();
+      await open(id);
+      version++;
+    }
+    await autosave.flush();
+    if (current) await syncDoc(current, true);
+  }
+
   /* ---------- the edits library ---------- */
 
   /** All documents with clean text for search. Saves the open document first so it is current. */
@@ -783,6 +1042,21 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     get canUndo() {
       return canUndo;
     },
+    get folder() {
+      return folder;
+    },
+    get external() {
+      return external;
+    },
+    get folderNotice() {
+      return folderNotice;
+    },
+    clearFolderNotice: () => (folderNotice = undefined),
+    connectFolder,
+    reconnectFolder,
+    disconnectFolder,
+    resolveExternal,
+    pollFolder: poll,
     get threads() {
       return visibleThreads;
     },

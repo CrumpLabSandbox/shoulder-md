@@ -2,6 +2,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import { openDB } from 'idb';
 import {
+  addTombstone,
+  clearFolderRecords,
+  getTombstones,
+  idbFolderStore,
   appendOps,
   appendToStored,
   libraryEntries,
@@ -92,7 +96,7 @@ describe('op-log store', () => {
   it('falls back to a full replay when the snapshot is corrupt', async () => {
     const doc = await createDoc({ text: 'Intact.', author: 'me', tracking: false });
     // Corrupt the snapshot hash behind the store's back.
-    const raw = await openDB('shoulder-md', 2);
+    const raw = await openDB('shoulder-md');
     const header = await raw.get('docs', doc.id);
     header.snapshot.hash = 'deadbeef';
     await raw.put('docs', header);
@@ -165,7 +169,7 @@ describe('library persistence', () => {
 
   it('fills fields missing from headers written by older versions', async () => {
     const doc = await createDoc({ text: 'Old header.', author: 'me' });
-    const raw = await openDB('shoulder-md', 2);
+    const raw = await openDB('shoulder-md');
     const header = await raw.get('docs', doc.id);
     delete header.acceptedChanges;
     delete header.status;
@@ -181,5 +185,21 @@ describe('library persistence', () => {
       libraryEligible: false,
       title: 'Old header.',
     });
+  });
+});
+
+describe('folder sync state', () => {
+  it('keeps file records and tombstones across connections', async () => {
+    const store = idbFolderStore();
+    await store.put({ docId: 'a', base: 'a', opCount: 3 });
+    await store.put({ docId: 'b', base: 'b-2', opCount: -1 });
+    expect((await store.get('a'))?.opCount).toBe(3);
+    expect((await store.all()).map((r) => r.base).sort()).toEqual(['a', 'b-2']);
+    await addTombstone('x');
+    await addTombstone('x');
+    expect(await getTombstones()).toEqual(['x']);
+    await clearFolderRecords();
+    expect(await store.all()).toEqual([]);
+    expect(await getTombstones()).toEqual(['x']);
   });
 });

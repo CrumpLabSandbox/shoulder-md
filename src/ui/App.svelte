@@ -219,9 +219,52 @@
         author={ws.author}
         onauthor={setAuthor}
         onclose={() => (settingsOpen = false)}
+        folder={ws.folder}
+        onconnectfolder={() => void ws.connectFolder()}
+        onreconnectfolder={() => void ws.reconnectFolder()}
+        ondisconnectfolder={() => void ws.disconnectFolder()}
       />
     {/if}
   </div>
+
+  {#if ws.external}
+    {@const ext = ws.external.ext}
+    <div class="notice external" role="alert">
+      <span>
+        {#if ext.kind === 'md'}
+          <b>{ext.file}</b> was edited outside the app.
+        {:else if ext.kind === 'json' && ext.extendsLocal}
+          <b>{ext.file}</b> has {ext.newOps} new {ext.newOps === 1 ? 'operation' : 'operations'} from
+          another tool.
+        {:else if ext.kind === 'json'}
+          <b>{ext.file}</b> on disk has a different history from this document.
+        {:else}
+          <b>{ext.file}</b> could not be read ({ext.error}).
+        {/if}
+      </span>
+      <span class="actions">
+        {#if ext.kind === 'md'}
+          <button class="primary" onclick={() => void ws.resolveExternal('disk')}
+            >Load as tracked changes</button
+          >
+        {:else if ext.kind === 'json' && ext.extendsLocal}
+          <button class="primary" onclick={() => void ws.resolveExternal('disk')}>Load them</button>
+        {:else if ext.kind === 'json'}
+          <button onclick={() => void ws.resolveExternal('disk')}>Use the disk version</button>
+        {/if}
+        <button onclick={() => void ws.resolveExternal('mine')}
+          >{ext.kind === 'invalid' ? 'Overwrite with my version' : 'Keep my version'}</button
+        >
+      </span>
+    </div>
+  {/if}
+
+  {#if ws.folderNotice}
+    <div class="notice" role="status">
+      <span>{ws.folderNotice}</span>
+      <button onclick={() => ws.clearFolderNotice()} aria-label="Dismiss">×</button>
+    </div>
+  {/if}
 
   {#if ws.importNotice}
     <div class="notice" role="status">
@@ -235,6 +278,9 @@
     saveStatus={ws.saveStatus}
     lastSavedAt={ws.lastSavedAt}
     saveError={ws.saveError}
+    folder={ws.folder}
+    onconnect={() => void ws.connectFolder()}
+    onreconnect={() => void ws.reconnectFolder()}
   />
 </div>
 
@@ -275,5 +321,16 @@
     font-size: 12px;
     background: color-mix(in srgb, #eab308 20%, var(--bg-elev));
     border-top: 1px solid var(--border);
+  }
+  .notice.external {
+    background: color-mix(in srgb, var(--accent) 14%, var(--bg-elev));
+  }
+  .notice .actions {
+    display: flex;
+    gap: 6px;
+  }
+  .notice .actions button {
+    border: 1px solid var(--border);
+    font-size: 12px;
   }
 </style>

@@ -2,7 +2,7 @@
 
 A browser Markdown editor with Word-style tracked changes and comments, built on a sentence-level JSON model that records every edit and its reason. `plan.md` is the spec and roadmap; read its status line and the current phase before starting work. `idea.json` is the original seed.
 
-Status: phases 0–5 are built (editor, model and op log, tracked changes, comments, exports, edits library). Next is phase 6, local folder storage (see `plan.md` §5 and §10), then phase 7, Claude as editor (§9).
+Status: phases 0–6 are built (editor, model and op log, tracked changes, comments, exports, edits library, folder sync). Next is phase 7, Claude as editor (see `plan.md` §9 and §10). A known model limit is listed in `plan.md` §13.
 
 ## Commands
 
@@ -29,6 +29,7 @@ src/docs/      workspace.svelte.ts: the app's reactive store and all editing com
 src/persist/   IndexedDB op log + snapshots; debounced autosave.
 src/export/    Markdown/CriticMarkup, JSON (+ schema.json), docx, print/PDF.
 src/library/   Change-record dataset (records.ts) and per-document stats (stats.ts).
+src/folder/    Folder sync engine (sync.ts), text → tracked edits (merge.ts), File System Access surface (fs.ts).
 src/ui/        Svelte components. App.svelte wires shortcuts and layout.
 src/settings/  Fonts catalog and appearance settings (localStorage).
 tests/         vitest. tests/helpers/model.ts is the model test harness.
@@ -53,7 +54,7 @@ tests/         vitest. tests/helpers/model.ts is the model test harness.
 
 ### Persistence
 
-IndexedDB v2: `docs` (header + hashed snapshot) and `ops` (keyed `[docId, seq]`). Load = snapshot + tail replay; a bad hash triggers a full replay. Phase 0 raw-text docs migrate via an `import` op. Snapshots every 200 ops / 30 s and when a document is closed.
+IndexedDB v3: `docs` (header + hashed snapshot), `ops` (keyed `[docId, seq]`), and `folder` (the folder handle, file records, tombstones). Load = snapshot + tail replay; a bad hash triggers a full replay. Phase 0 raw-text docs migrate via an `import` op. Snapshots every 200 ops / 30 s and when a document is closed.
 
 ## Conventions and gotchas
 
@@ -63,6 +64,8 @@ IndexedDB v2: `docs` (header + hashed snapshot) and `ops` (keyed `[docId, seq]`)
 - Keyboard: ⌘⌥ chords are matched on `e.code` (Alt changes `e.key` on some layouts). Undo/redo keys are handled in a `keydown` DOM handler, not the keymap.
 - Prettier formats `.svelte` files and reflows code; do not assume an exact earlier layout when patching a file by string match.
 - `plan.md` and `idea.json` are excluded from Prettier on purpose.
+- Folder writes are debounced per document and `park()` flushes them before switching documents. Only raise an outside-change prompt when the browser has not moved on since the copy being written; otherwise the next write applies browser-wins.
+- Opening IndexedDB by hand in tests: `openDB('shoulder-md')` with no version, so tests keep working when the schema version goes up.
 - The `.docx` exporter is dynamically imported so it stays out of the main bundle.
 - Commit messages: imperative summary line, a body explaining what and why. Update `plan.md` (status line and the phase entry) and `README.md` when a phase lands.
 
@@ -72,4 +75,5 @@ IndexedDB v2: `docs` (header + hashed snapshot) and `ops` (keyed `[docId, seq]`)
 - Use `harness()` from `tests/helpers/model.ts`: it gives `edit(from, to, insert, opts)` at absolute revision offsets, `accept`/`reject`, `op()`, `inverse`, `applyOps()`, and the three texts.
 - Editor behaviour is tested headless with `EditorState.update` (`tests/tracking.test.ts`).
 - Word export is tested by unzipping with JSZip and checking the XML (`tests/export-docx.test.ts`).
+- Folder sync is tested against `tests/helpers/memfs.ts` (an in-memory folder). In the browser, stub the picker with `ctx.addInitScript(() => { window.showDirectoryPicker = async () => (await navigator.storage.getDirectory()).getDirectoryHandle('repo', { create: true }); })` to get a real handle from Chromium's private file system.
 - For a real-browser check, build, run `pnpm vite preview --port 4173`, and drive it with `playwright-core`. Scripts must live inside the repo to resolve the package (ESM ignores `NODE_PATH`); use a throwaway `.smoke/` directory and delete it after. Wait for the status bar to read "Saved" before reloading.

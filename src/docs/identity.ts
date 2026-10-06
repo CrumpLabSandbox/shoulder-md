@@ -47,6 +47,10 @@ export function authorColor(id: string, known: readonly Author[] = []): string {
   return AUTHOR_PALETTE[h % AUTHOR_PALETTE.length]!;
 }
 
+/** Authors that are not people: edits loaded from the folder, and (phase 7) Claude. */
+export const DISK_AUTHOR = 'disk';
+const BUILTIN_NAMES: Record<string, string> = { [DISK_AUTHOR]: 'Edited on disk', claude: 'Claude' };
+
 export function authorName(id: string, known: readonly Author[] = []): string {
-  return known.find((a) => a.id === id)?.name ?? id;
+  return known.find((a) => a.id === id)?.name ?? BUILTIN_NAMES[id] ?? id;
 }
