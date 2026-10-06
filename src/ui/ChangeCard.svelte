@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import type { PendingChange } from '../model/changes';
   import { formatTime } from '../util/time';
 
@@ -12,6 +13,9 @@
     onreason,
     onjump,
     oncomment,
+    showTags,
+    reasonRequested,
+    onreasonhandled,
   }: {
     change: PendingChange;
     color: string;
@@ -22,7 +26,23 @@
     onreason: (reason: string | undefined, tags: string[]) => void;
     onjump: () => void;
     oncomment: (body: string) => void;
+    /** Show the reason tag chips. When on, the reason row is always shown so nothing shifts. */
+    showTags: boolean;
+    /** Open the reason field and focus it (⌘⌥E). */
+    reasonRequested: boolean;
+    onreasonhandled: () => void;
   } = $props();
+
+  let reasonInput: HTMLInputElement | undefined = $state();
+  /** The free-text reason row, when tags are hidden, opens on demand and stays open. */
+  let reasonOpen = $state(false);
+
+  $effect(() => {
+    if (!reasonRequested) return;
+    reasonOpen = true;
+    onreasonhandled();
+    void tick().then(() => reasonInput?.focus());
+  });
 
   let commenting = $state(false);
   let commentText = $state('');
@@ -73,7 +93,11 @@
   }
 
   const when = $derived(change.record.ts ? formatTime(Date.parse(change.record.ts)) : '');
-  const hasReason = $derived(!!change.record.reason || (change.record.reasonTags?.length ?? 0) > 0);
+  const hasReason = $derived(!!change.record.reason);
+  const savedTags = $derived(change.record.reasonTags ?? []);
+  // Layout never depends on hover or on the cursor position: the reason row is shown when tags
+  // are on, when a reason exists, or after the user asked for it.
+  const showReasonRow = $derived(showTags || hasReason || reasonOpen || editing);
 </script>
 
 <article class="card" class:active style:--author-color={color} data-change={change.id}>
@@ -91,28 +115,55 @@
     {#if !change.before && !change.after}<em class="muted">(empty)</em>{/if}
   </p>
 
-  <div class="reason" class:open={active || hasReason || editing}>
-    <div class="tags">
-      {#each TAGS as t (t)}
-        <button class="tag" class:on={tags.includes(t)} onclick={() => toggleTag(t)}>{t}</button>
-      {/each}
+  <!-- Actions come before anything that can grow, so they never move under the pointer. -->
+  <footer>
+    <button class="accept" onclick={onaccept} title="Accept (⌘⌥A)">Accept</button>
+    <button class="reject" onclick={onreject} title="Reject (⌘⌥R)">Reject</button>
+    {#if !showReasonRow}
+      <button
+        class="why"
+        onclick={() => {
+          reasonOpen = true;
+          void tick().then(() => reasonInput?.focus());
+        }}
+        title="Add a reason (⌘⌥E)">Why?</button
+      >
+    {/if}
+    <button class="comment" onclick={() => (commenting = !commenting)} title="Discuss this change"
+      >💬</button
+    >
+  </footer>
+
+  {#if showReasonRow}
+    <div class="reason">
+      {#if showTags}
+        <div class="tags">
+          {#each TAGS as t (t)}
+            <button class="tag" class:on={tags.includes(t)} onclick={() => toggleTag(t)}>{t}</button
+            >
+          {/each}
+        </div>
+      {:else if savedTags.length > 0}
+        <p class="saved-tags">{savedTags.join(' · ')}</p>
+      {/if}
+      <input
+        bind:this={reasonInput}
+        class="reason-text"
+        type="text"
+        placeholder="Why? (optional)"
+        bind:value={draft}
+        onfocus={() => (editing = true)}
+        onblur={commitText}
+        onkeydown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+          if (e.key === 'Escape') {
+            draft = change.record.reason ?? '';
+            e.currentTarget.blur();
+          }
+        }}
+      />
     </div>
-    <input
-      class="reason-text"
-      type="text"
-      placeholder="Why? (optional)"
-      bind:value={draft}
-      onfocus={() => (editing = true)}
-      onblur={commitText}
-      onkeydown={(e) => {
-        if (e.key === 'Enter') e.currentTarget.blur();
-        if (e.key === 'Escape') {
-          draft = change.record.reason ?? '';
-          e.currentTarget.blur();
-        }
-      }}
-    />
-  </div>
+  {/if}
 
   {#if commenting}
     <input
@@ -126,14 +177,6 @@
       }}
     />
   {/if}
-
-  <footer>
-    <button class="accept" onclick={onaccept} title="Accept (⌘⌥A)">Accept</button>
-    <button class="reject" onclick={onreject} title="Reject (⌘⌥R)">Reject</button>
-    <button class="comment" onclick={() => (commenting = !commenting)} title="Discuss this change"
-      >💬</button
-    >
-  </footer>
 </article>
 
 <style>
@@ -196,14 +239,15 @@
     color: var(--fg-faint);
   }
   .reason {
-    display: none;
+    display: flex;
     flex-direction: column;
     gap: 4px;
-    margin-bottom: 6px;
+    margin-top: 6px;
   }
-  .reason.open,
-  .card:hover .reason {
-    display: flex;
+  .saved-tags {
+    margin: 0;
+    font-size: 11px;
+    color: var(--fg-muted);
   }
   .tags {
     display: flex;
@@ -228,7 +272,10 @@
     font-size: 12px;
   }
   .comment-text {
-    margin-bottom: 6px;
+    margin-top: 6px;
+  }
+  .why {
+    color: var(--fg-muted);
   }
   .comment {
     margin-left: auto;

@@ -52,6 +52,17 @@ describe('settings', () => {
     expect(s.theme).toBe('system');
   });
 
+  it('hides reason tags by default and keeps the choice out of presets', () => {
+    expect(DEFAULT_SETTINGS.showReasonTags).toBe(false);
+    const on = withChange(applyPreset(DEFAULT_SETTINGS, 'mono'), 'showReasonTags', true);
+    expect(on.showReasonTags).toBe(true);
+    expect(on.preset).toBe('mono');
+    expect(applyPreset(on, 'manuscript').showReasonTags).toBe(true);
+    expect(sanitize({ ...DEFAULT_SETTINGS, showReasonTags: 'yes' as never }).showReasonTags).toBe(
+      false,
+    );
+  });
+
   it('switches preset to custom when a preset-controlled key changes', () => {
     const s = applyPreset(DEFAULT_SETTINGS, 'mono');
     expect(s.preset).toBe('mono');

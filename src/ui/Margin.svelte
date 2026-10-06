@@ -10,8 +10,13 @@
     ws,
     measure,
     tick,
+    showTags,
+    ontoggletags,
   }: {
     ws: Workspace;
+    /** Whether change cards show reason tag chips. */
+    showTags: boolean;
+    ontoggletags: (show: boolean) => void;
     /** Viewport-relative top of a revision offset, from the editor. */
     measure: (pos: number) => number | undefined;
     /** Bumped when the editor scrolls, resizes, or changes, to re-measure. */
@@ -89,42 +94,35 @@
       >
       {#if menuOpen}
         <div class="dropdown" role="menu">
-          {#if ws.pending.length > 0}
-            <button
-              onclick={() => {
-                ws.acceptAll();
-                menuOpen = false;
-              }}>Accept all changes</button
-            >
-            <button
-              onclick={() => {
-                ws.rejectAll();
-                menuOpen = false;
-              }}>Reject all changes</button
-            >
-            {#if byAuthor.length > 1}
-              <hr />
-              {#each byAuthor as [id, n] (id)}
-                <button
-                  onclick={() => {
-                    ws.accept(ws.pending.filter((c) => c.author === id).map((c) => c.id));
-                    menuOpen = false;
-                  }}
-                >
-                  Accept {authorName(id, ws.authors)} ({n})
-                </button>
-                <button
-                  onclick={() => {
-                    ws.reject(ws.pending.filter((c) => c.author === id).map((c) => c.id));
-                    menuOpen = false;
-                  }}
-                >
-                  Reject {authorName(id, ws.authors)} ({n})
-                </button>
-              {/each}
-            {/if}
+          {#if ws.pending.length > 0 && byAuthor.length > 1}
+            {#each byAuthor as [id, n] (id)}
+              <button
+                onclick={() => {
+                  ws.accept(ws.pending.filter((c) => c.author === id).map((c) => c.id));
+                  menuOpen = false;
+                }}
+              >
+                Accept {authorName(id, ws.authors)} ({n})
+              </button>
+              <button
+                onclick={() => {
+                  ws.reject(ws.pending.filter((c) => c.author === id).map((c) => c.id));
+                  menuOpen = false;
+                }}
+              >
+                Reject {authorName(id, ws.authors)} ({n})
+              </button>
+            {/each}
             <hr />
           {/if}
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={showTags}
+              onchange={(e) => ontoggletags(e.currentTarget.checked)}
+            />
+            Show reason tags on changes
+          </label>
           <label class="check">
             <input
               type="checkbox"
@@ -137,6 +135,16 @@
       {/if}
     </div>
   </div>
+  {#if ws.pending.length > 0}
+    <div class="bulk">
+      <button class="accept-all" onclick={() => ws.acceptAll()} title="Accept every pending change">
+        ✓ Accept all
+      </button>
+      <button class="reject-all" onclick={() => ws.rejectAll()} title="Reject every pending change">
+        ✕ Reject all
+      </button>
+    </div>
+  {/if}
   <div class="cards">
     {#each items as it (it.key)}
       <div
@@ -159,6 +167,9 @@
             onreject={() => ws.reject([it.change.id])}
             onreason={(reason, tags) => ws.setReason(it.change.id, reason, tags)}
             onjump={() => ws.jumpTo(it.change.id)}
+            {showTags}
+            reasonRequested={ws.reasonRequest === it.change.id}
+            onreasonhandled={() => ws.clearReasonRequest()}
             oncomment={(body) => ws.addComment(body, { changeId: it.change.id })}
           />
         {:else if it.kind === 'comment'}
@@ -212,6 +223,26 @@
   }
   .menu {
     position: relative;
+  }
+  .bulk {
+    display: flex;
+    gap: 6px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev);
+  }
+  .bulk button {
+    flex: 1;
+    font-size: 12px;
+    border: 1px solid var(--border);
+  }
+  .accept-all:hover {
+    background: color-mix(in srgb, #16a34a 15%, transparent);
+    border-color: #16a34a;
+  }
+  .reject-all:hover {
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    border-color: var(--danger);
   }
   .dropdown {
     position: absolute;

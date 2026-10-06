@@ -147,6 +147,18 @@
   </section>
 
   <section>
+    <h3>Changes</h3>
+    <label class="row">
+      <input
+        type="checkbox"
+        checked={s.showReasonTags}
+        onchange={(e) => store.set('showReasonTags', e.currentTarget.checked)}
+      />
+      <span>Show reason tags on change cards</span>
+    </label>
+  </section>
+
+  <section>
     <h3>Identity</h3>
     <label>
       <span>Your name (on changes and comments)</span>

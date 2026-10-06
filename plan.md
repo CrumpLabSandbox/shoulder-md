@@ -356,7 +356,7 @@ Each phase ends with something usable. Phases 0 and 1 overlap in time.
 
 ### Phase 2: Track changes (built)
 - Tracking toggle (toolbar, ⌘⌥T), insertion and deletion decorations coloured by author, atomic deletion ranges, keystroke coalescing into one change.
-- Change cards in a margin aligned to their anchors (pushed apart when they would overlap): author, time, before → after, reason chips and free text, accept and reject. Accept/reject one, all, or by author; next/previous change (⌘⌥N, ⌘⌥P); accept/reject the change at the cursor (⌘⌥A, ⌘⌥R); focus its reason (⌘⌥E).
+- Change cards in a margin aligned to their anchors (pushed apart when they would overlap): author, time, before → after, accept and reject, then the reason row below the buttons so nothing ever shifts them. Reason tag chips are hidden by default (toggle in the margin menu or Settings); with them hidden, "Why?" opens a free-text reason. Accept all and Reject all sit in a bar under the margin header; accept/reject by author is in the margin menu; next/previous change (⌘⌥N, ⌘⌥P); accept/reject the change at the cursor (⌘⌥A, ⌘⌥R); focus its reason (⌘⌥E).
 - Markup, clean, and original views; clean and original are read-only.
 - Undo and redo through the model (see §4), with ⌘Z, ⌘⇧Z, ⌘Y and toolbar buttons.
 - Author name and colour in settings.

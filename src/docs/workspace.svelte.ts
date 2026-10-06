@@ -107,6 +107,8 @@ export function createWorkspace(initialAuthor: Author) {
   /* ---------- comments ---------- */
 
   let showResolved = $state(false);
+  /** A change whose reason field should open and take focus (⌘⌥E). Cleared by the card. */
+  let reasonRequest = $state<string | undefined>(undefined);
   let draft = $state.raw<{ from: number; to: number } | undefined>(undefined);
   const threads = $derived<Thread[]>(
     current
@@ -750,6 +752,15 @@ export function createWorkspace(initialAuthor: Author) {
     },
     get showResolved() {
       return showResolved;
+    },
+    get reasonRequest() {
+      return reasonRequest;
+    },
+    requestReason(changeId: string) {
+      reasonRequest = changeId;
+    },
+    clearReasonRequest() {
+      reasonRequest = undefined;
     },
     setShowResolved(v: boolean) {
       showResolved = v;

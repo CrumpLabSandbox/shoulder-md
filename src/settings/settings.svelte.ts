@@ -12,6 +12,8 @@ export type Settings = {
   theme: Theme;
   layout: Layout;
   preset: string; // preset id or 'custom'
+  /** Show the reason tag chips on change cards. Off by default; free-text reasons stay available. */
+  showReasonTags: boolean;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -23,6 +25,7 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
   layout: 'editor',
   preset: 'draft',
+  showReasonTags: false,
 };
 
 export type Preset = {
@@ -133,6 +136,7 @@ export function sanitize(s: Settings): Settings {
     theme: (['system', 'light', 'dark', 'sepia'] as const).includes(s.theme) ? s.theme : 'system',
     layout: (['editor', 'split', 'preview'] as const).includes(s.layout) ? s.layout : 'editor',
     preset: s.preset,
+    showReasonTags: typeof s.showReasonTags === 'boolean' ? s.showReasonTags : false,
   };
 }
 

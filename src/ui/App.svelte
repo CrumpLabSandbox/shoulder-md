@@ -42,6 +42,7 @@
     void ws.pending;
     void ws.threads;
     void ws.draft;
+    void settings.value.showReasonTags;
     void layout;
     void showMargin;
     requestAnimationFrame(() => tick++);
@@ -99,12 +100,7 @@
     const id = ws.activeChangeId;
     if (!id) return;
     marginOpen = true;
-    requestAnimationFrame(() => {
-      const input = document.querySelector<HTMLInputElement>(
-        `.card[data-change="${id}"] .reason-text`,
-      );
-      input?.focus();
-    });
+    ws.requestReason(id);
   }
 
   onMount(() => {
@@ -186,7 +182,13 @@
     </main>
 
     {#if showMargin && ws.ready}
-      <Margin {ws} measure={(pos) => editor?.measureTop(pos)} {tick} />
+      <Margin
+        {ws}
+        measure={(pos) => editor?.measureTop(pos)}
+        {tick}
+        showTags={settings.value.showReasonTags}
+        ontoggletags={(v) => settings.set('showReasonTags', v)}
+      />
     {/if}
 
     {#if settingsOpen}
