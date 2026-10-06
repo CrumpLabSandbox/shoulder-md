@@ -332,19 +332,44 @@ A library is a collection of documents, each carrying its full history. In v1 it
 
 ---
 
-## 9. Claude as an editor (phase 2)
+## 9. Style guides, the principle inbox, and Claude as an editor
 
-Build after the manual editor is solid, because the data model and accept/reject flow are what make Claude's edits useful.
+Agreed on 2026-10-06. The idea: before Claude edits anything, build up a written account of how you edit (your principles), learn it from your own reasoned edits, and only then let Claude propose edits guided by it. Everything runs locally through Claude Code on your existing plan, working on the synced folder. No API key and no separate API billing.
 
-- **Input**: the clean text as a list of `{sentenceId, text}` per block, plus the user's instruction ("tighten this", "copy-edit", "check for jargon"), plus optional style guide text derived from the library.
-- **Output**: a JSON array of proposed changes: `{sentenceId, from, to, replacement, reasonTags, reason}`. Validated, then applied as tracked changes with author `claude`. The user accepts or rejects each one. Those decisions become library records.
-- **Scope**: whole document, selection, or one sentence.
-- **Transport options**, choose one in phase 2:
-  1. Direct from the browser with an API key stored locally (fastest to build).
-  2. A tiny local Node proxy that holds the key.
-  3. Claude Code reading and writing the `.shoulder.json` file in the local folder, which is the most natural fit once folder storage exists: a skill emits ops and the editor picks them up.
-- **Secondary features**: "Explain this change" for a human change with no reason, draft replies in comment threads, a per-document summary of what was edited and why.
-- **Evaluation**: the acceptance rate of Claude's changes by reason tag over time, computed from the library.
+### Style guides
+
+- **A base guide plus genre add-ons.** The base guide holds principles that apply to everything; each genre (papers, grants, emails, ...) adds principles or overrides base ones. Each document picks a genre; its principles are the base plus that genre's add-on.
+- Guides are documents in the app like any other, so they get tracked changes, comments and history.
+- Each principle has a **stable id** (for example `B7`, `papers-3`) that survives rewording and reordering, so links from edits to principles never break.
+
+### Reasons and principles
+
+- While editing, reasons stay **free text** (the tag chips stay optional, as now).
+- Reasons get **linked to principles afterwards**, suggested by Claude in the inbox (below) and confirmed by you. Manual linking is available too, and is the only route for documents with Claude switched off.
+
+### The Claude switch
+
+- A per-document switch for whether Claude may read and work with the document. It is independent of library inclusion (the dataset export) and of JSON storage.
+- **Defaults come from the genre**: on by default, and a genre can be marked private so its documents default to off. Any document can be switched either way.
+- **Enforced through the folders.** Documents that allow Claude sync to the shared folder, where Claude Code works. Documents with Claude off sync to a **separate private folder** you choose, outside any repo Claude Code works in. Switching a document off removes its files from the shared folder (after you confirm: the first time the app deletes files) and writes them to the private folder; switching it on moves them back.
+
+### The principle inbox
+
+- A review document that Claude fills with **suggested principles** drawn from your reasoned edits. Each entry has: the principle; base or which genre; the edits behind it (before, after, your reason, a link to the document); how many edits support it; and any overlap with an existing principle, proposed as a rewording of that principle instead.
+- **Review actions** per entry: add to the base guide, add to a genre, merge into an existing principle, edit then add, or dismiss. Additions land in the guide as tracked changes. Dismissed ideas are remembered and not suggested again. Your add/merge/dismiss decisions are kept as data too.
+- The same pass suggests **links from new reasons to existing principles**, for you to confirm.
+- **Input**: reasoned edits from documents that allow Claude (that is, the shared folder only).
+- **Runs only when you ask**: you run a Claude Code command (`/suggest-principles`) in the shared folder. The app cannot launch Claude Code itself, so it shows the command with a copy button.
+- **The app prepares the input**: each sync it writes a compact digest of reasoned edits since the last run (before/after sentences, reason, document, genre) into the shared folder, so the command reads that rather than op logs. Claude writes its suggestions to an inbox file; the app picks the change up through folder sync and shows the new entries for review.
+
+### Claude as an editor (after the guide has grown)
+
+- Same route: a Claude Code command writes **proposals** next to a document (each quoting the text to change, the replacement, the principle it applies, and a reason). The app turns them into tracked changes by "Claude", anchored by the quoted text so they survive typing in the meantime. You accept or reject; those decisions feed the library and the inbox.
+- Only documents that allow Claude are ever touched.
+
+### Measurement (later)
+
+- Once the guide has a few hundred reasoned edits behind it: hold back some of your past edits, have Claude edit the same "before" sentences with the guide, and compare with what you did. This says whether the guide is making Claude edit more like you, and whether a guide change helped.
 
 ---
 
@@ -398,8 +423,17 @@ Each phase ends with something usable. Phases 0 and 1 overlap in time.
 - Verified with unit tests against an in-memory folder, a property test that any target text is reached through tracked edits, and a browser run against a real directory handle from Chromium's origin-private file system: continuous writes, an outside `.md` edit loaded as tracked changes and undone, an op appended by another tool, both sides changing, reconnect on reload, and a fresh browser profile importing the folder.
 - Done: a git repo folder stays in sync while writing. This is also the transport phase 7 can use: Claude Code edits the `.md` (arriving as tracked changes) or appends ops to the `.shoulder.json`.
 
-### Phase 7: Claude as editor (2 weeks)
-- Section 9. Pick a transport, build proposal → tracked changes, evaluation view.
+### Phase 7: Style guides and genres (no Claude)
+- Guide documents (base plus genre add-ons) with stable principle ids; a genre picker on each document; the per-document Claude switch with per-genre defaults and private genres; the private folder for Claude-off documents; manual linking from a change's reason to a principle. See §9.
+
+### Phase 8: The principle inbox
+- The inbox document and its review actions; the edits digest the app writes to the shared folder; the `/suggest-principles` Claude Code command (a skill in the repo) and the inbox file format; suggested links from reasons to principles. See §9.
+
+### Phase 9: Claude as an editor
+- A Claude Code command that writes proposals guided by the document's principles; the app turns them into tracked changes by "Claude". See §9.
+
+### Phase 10: Measurement
+- Once the guide has grown: held-out edits, Claude's edits of the same sentences with the guide, side-by-side comparison and a match rate over time. See §9.
 
 ### Later, unscheduled
 - Word import: plain text first, then revisions and comments.
@@ -448,6 +482,13 @@ Resolved after phase 6:
 
 - Deleting another author's pending insertion used to turn it into a plain deletion, losing the insertion, so "Original" view and reject-all showed text that was never in the original. Spans now carry both marks (see §4). Property tests with three authors check that accept-all gives the clean text, reject-all gives the original, and any mix of decisions gives the same text in any order. CriticMarkup writes such text as `{--{++text++}--}`, Word export nests `w:del` inside `w:ins`, and a change whose marks all disappear with another decision (a deletion of an insertion that was rejected) no longer counts as pending.
 
-Still open:
+Settled on 2026-10-06, planning phases 7 to 10 (details in §9):
 
-- Phase 7 transport: browser API key, local proxy, or Claude Code via folder storage. Decide once phase 6 exists.
+7. Style guides: one base guide plus genre add-ons; each document picks a genre.
+8. Reasons stay free text while editing; principles are linked afterwards, suggested by Claude and confirmed by you.
+9. Claude access is per document, defaulting from the genre: on by default, and genres can be private (off by default).
+10. Documents with Claude off sync to a separate private folder; switching off removes their files from the shared folder, after confirmation.
+11. A principle inbox collects Claude's suggested principles for review; it learns from reasoned edits in documents that allow Claude.
+12. The inbox runs only when you ask.
+13. Transport: Claude Code on the synced folder, on your existing plan. No separate API key or API billing for now.
+14. Measurement comes after the guide has grown.

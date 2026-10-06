@@ -2,7 +2,7 @@
 
 A browser Markdown editor with Word-style tracked changes and comments, built on a sentence-level JSON model that records every edit and its reason. `plan.md` is the spec and roadmap; read its status line and the current phase before starting work. `idea.json` is the original seed.
 
-Status: phases 0–6 are built (editor, model and op log, tracked changes, comments, exports, edits library, folder sync), plus nested insert/delete marks. Next is phase 7, Claude as editor (see `plan.md` §9 and §10).
+Status: phases 0–6 are built (editor, model and op log, tracked changes, comments, exports, edits library, folder sync), plus nested insert/delete marks. Next is phase 7, style guides and genres; Claude works through Claude Code on the synced folder, never a browser API key (see `plan.md` §9, §10 and §13).
 
 ## Commands
 
