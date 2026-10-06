@@ -58,6 +58,14 @@ const initialArb = fc.constantFrom(
   'Plain\ntext here.\n',
 );
 
+/**
+ * Marks without sentence ids. Ids are checked separately: a sentence that an op merged into a
+ * neighbour may come back from undo with a fresh id (plan.md §4), so marks compare by position.
+ */
+function marksOf(state: Parameters<typeof markedRanges>[0]): string {
+  return JSON.stringify(markedRanges(state).map(({ sentenceId: _s, ...r }) => (void _s, r)));
+}
+
 let stepCounter = 0;
 
 function run2(h: ReturnType<typeof harness>, s: Step) {
@@ -136,7 +144,7 @@ describe('model properties', () => {
             rev: h.rev(),
             clean: h.clean(),
             original: h.original(),
-            marks: JSON.stringify(markedRanges(h.state)),
+            marks: marksOf(h.state),
             changes: JSON.stringify(h.state.changes),
             ids: h.ids(),
             sentences: h.sentences(),
@@ -148,7 +156,7 @@ describe('model properties', () => {
           expect(h.rev()).toBe(before.rev);
           expect(h.clean()).toBe(before.clean);
           expect(h.original()).toBe(before.original);
-          expect(JSON.stringify(markedRanges(h.state))).toBe(before.marks);
+          expect(marksOf(h.state)).toBe(before.marks);
           expect(JSON.stringify(h.state.changes)).toBe(before.changes);
           // Structure comes back, and so do the ids of sentences that survived the op; restored
           // spans carry their old ids as hints. A sentence the op merged into a neighbour and the

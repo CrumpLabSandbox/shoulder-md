@@ -2,7 +2,7 @@
 
 A browser-based Markdown editor with Word-style tracked changes and comments, built on a structured JSON layer that records every edit and the reason for it. Exports to Markdown, Word, PDF, or the full JSON. Over time, a library of edited documents whose history can teach Claude to edit the way this writer edits.
 
-Status: phases 0 to 4 built (writing app with autosave, fonts and preview; sentence-level model and op log; Word-style tracked changes with reasons, accept/reject, views, and model-level undo; comment threads in the same margin; exports to Markdown, CriticMarkup, Word, JSON and PDF, with CriticMarkup and JSON import). This document is the spec for v1 and the roadmap after it.
+Status: phases 0 to 5 built (writing app with autosave, fonts and preview; sentence-level model and op log; Word-style tracked changes with reasons, accept/reject, views, and model-level undo; comment threads in the same margin; exports to Markdown, CriticMarkup, Word, JSON and PDF, with CriticMarkup and JSON import; the edits library with its JSONL change-record export). This document is the spec for v1 and the roadmap after it.
 
 ---
 
@@ -302,20 +302,25 @@ A library is a collection of documents, each carrying its full history. In v1 it
 
 - Library view: list with title, status, tags, last edited, counts of pending/accepted/rejected changes, search by title and text.
 - Per document: `libraryEligible` flag, default off. Only eligible documents appear in library exports. This is the privacy gate.
-- **Change record export** (JSONL), one row per tracked change:
+- **Change record export** (JSONL), one row per change, version 1 (`src/library/records.ts`):
 
 ```json
 {
-  "docId": "...", "changeId": "...", "author": "matt",
-  "blockKind": "paragraph",
-  "before": "The results was significant.",
-  "after": "The results were significant.",
-  "contextBefore": "…previous sentence…", "contextAfter": "…next sentence…",
-  "reasonTags": ["grammar"], "reason": "subject-verb agreement",
-  "outcome": "accepted", "decidedBy": "matt", "ts": "2026-10-05T…"
+  "v": 1, "docId": "...", "docTitle": "...", "changeId": "...",
+  "author": "Matt", "ts": "2026-10-05T…", "blockKind": "paragraph",
+  "before": "was", "after": "were",
+  "sentenceBefore": "The results was significant.",
+  "sentenceAfter": "The results were significant.",
+  "contextBefore": "We ran it.", "contextAfter": "Then we stopped.",
+  "reason": "subject-verb agreement", "reasonTags": ["grammar"],
+  "discussion": [{ "author": "Matt", "ts": "…", "body": "plural subject" }],
+  "outcome": "accepted", "decidedBy": "Matt", "decidedAt": "2026-10-05T…"
 }
 ```
 
+  - `outcome` is `accepted`, `rejected`, `pending` (only when asked), or `untracked` (edits made with tracking off; only when asked).
+  - Sentences and context are captured at decision time by replaying the op log, so they show the text the decider saw. Other changes still pending at that moment appear in their original form, so `sentenceBefore` and `sentenceAfter` differ only by this change. A change that removes a sentence boundary pulls in the following sentence.
+  - `discussion` is the comment threads attached to the change. Author ids are mapped to the local author's display name.
 - This is the dataset the idea describes: edits with reasons and whether they were kept. It feeds a style guide, examples for a Claude skill, and later an evaluation of whether Claude's suggestions improve.
 - Later: the local folder storage makes the library a plain directory in a git repo, which is where the "Claude Training Guides" and paper-librarian ideas can read from.
 
@@ -374,9 +379,12 @@ Each phase ends with something usable. Phases 0 and 1 overlap in time.
 - Import from the document list: a Markdown or CriticMarkup file becomes a new document (markup becomes pending changes and threads via one `splice` op, so the log stays replayable); a `.shoulder.json` export is checked by replaying its op log and the replayed state wins over the stored one.
 - Verified in Node by unzipping the generated .docx and checking the XML, and in the browser by downloading each format and re-importing the CriticMarkup and JSON exports. Still to check by hand: opening the .docx in Word and LibreOffice.
 
-### Phase 5: Library (1 week)
-- Library view, tags, status, search, `libraryEligible`, JSONL change-record export.
-- Done when: an exported JSONL from a few edited documents is something you would hand to a Claude skill.
+### Phase 5: Library (built)
+- Library view (toolbar button or ⌘⌥L): every document with an "In" checkbox (`libraryEligible`), status, comma-separated tags, accepted/rejected/pending counts, reasons, words and last edit; search across titles, tags and text with a snippet for body matches; filters for status and library-only.
+- A summary of the library (documents, decided changes, how many have reasons, acceptance rate) and the JSONL export, with options to include pending changes and untracked edits.
+- "New documents join the library" sets the per-library default (off by default); it applies to new and imported Markdown documents.
+- Metadata edits on documents that are not open go straight to the stored op log as `set_meta` ops with a fresh snapshot.
+- Done: the export from a few edited documents is clean enough to hand to a Claude skill; each record isolates one change with its sentence, neighbours, reason and outcome.
 
 ### Phase 6: Local folder storage (1 week)
 - File System Access API, `.md` plus `.shoulder.json` written continuously, reconnect on reload, conflict rule.

@@ -14,6 +14,8 @@ export type Settings = {
   preset: string; // preset id or 'custom'
   /** Show the reason tag chips on change cards. Off by default; free-text reasons stay available. */
   showReasonTags: boolean;
+  /** New documents join the edits library. Off by default: the library is opt-in. */
+  libraryDefault: boolean;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -26,6 +28,7 @@ export const DEFAULT_SETTINGS: Settings = {
   layout: 'editor',
   preset: 'draft',
   showReasonTags: false,
+  libraryDefault: false,
 };
 
 export type Preset = {
@@ -137,6 +140,7 @@ export function sanitize(s: Settings): Settings {
     layout: (['editor', 'split', 'preview'] as const).includes(s.layout) ? s.layout : 'editor',
     preset: s.preset,
     showReasonTags: typeof s.showReasonTags === 'boolean' ? s.showReasonTags : false,
+    libraryDefault: typeof s.libraryDefault === 'boolean' ? s.libraryDefault : false,
   };
 }
 

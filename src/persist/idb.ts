@@ -15,18 +15,14 @@ import { applyOp, createDocument, replay } from '../model/apply';
 import { hashState } from '../model/hash';
 import { ulid } from '../model/ids';
 import { text as viewText } from '../model/views';
-import { countWords } from '../util/text';
-import { displayTitle } from '../docs/title';
+import { docStats, type DocStats } from '../library/stats';
 
 export type Snapshot = { state: State; opCount: number; hash: string; at: string };
 
-export type DocHeader = {
+export type DocHeader = DocStats & {
   id: string;
-  title: string;
   createdAt: string;
   updatedAt: string;
-  words: number;
-  pendingChanges: number;
   authors: Document['authors'];
   snapshot: Snapshot;
 };
@@ -96,17 +92,22 @@ export function resetConnection(): void {
 }
 
 function headerOf(doc: Document, opCount: number, at: string): DocHeader {
-  const clean = viewText(doc.state, 'clean');
   return {
     id: doc.id,
-    title: displayTitle(doc.state.meta.title, clean),
+    ...docStats(doc.state),
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
-    words: countWords(clean),
-    pendingChanges: Object.values(doc.state.changes).filter((c) => c.status === 'pending').length,
     authors: doc.authors,
     snapshot: { state: doc.state, opCount, hash: hashState(doc.state), at },
   };
+}
+
+/** Headers written before a field existed get it from their snapshot. */
+function summaryOf(h: DocHeader): DocSummary {
+  const { snapshot, authors: _a, ...rest } = h;
+  void _a;
+  if (rest.acceptedChanges !== undefined && rest.status !== undefined) return rest;
+  return { ...docStats(snapshot.state), ...rest };
 }
 
 export async function createDoc(init: {
@@ -114,12 +115,14 @@ export async function createDoc(init: {
   title?: string;
   author: string;
   tracking?: boolean;
+  libraryEligible?: boolean;
 }): Promise<Document> {
   const doc = createDocument({
     text: init.text,
     title: init.title,
     author: init.author,
     tracking: init.tracking,
+    libraryEligible: init.libraryEligible,
   });
   const d = await db();
   const tx = d.transaction(['docs', 'ops'], 'readwrite');
@@ -225,11 +228,30 @@ export async function deleteDoc(id: string): Promise<void> {
 
 export async function listDocs(): Promise<DocSummary[]> {
   const all = await (await db()).getAllFromIndex('docs', 'by-updated');
-  return all.reverse().map(({ snapshot: _s, authors: _a, ...rest }) => {
-    void _s;
-    void _a;
-    return rest;
-  });
+  return all.reverse().map(summaryOf);
+}
+
+export type LibraryEntry = DocSummary & { text: string };
+
+/** Every document with its clean text (from the snapshot) for search. Newest first. */
+export async function libraryEntries(): Promise<LibraryEntry[]> {
+  const all = await (await db()).getAllFromIndex('docs', 'by-updated');
+  return all.reverse().map((h) => ({ ...summaryOf(h), text: viewText(h.snapshot.state, 'clean') }));
+}
+
+/** Applies one op to a stored document that is not open, and saves it with a fresh snapshot. */
+export async function appendToStored(id: string, op: Op): Promise<Document | undefined> {
+  const loaded = await loadDoc(id);
+  if (!loaded) return undefined;
+  const applied = applyOp(loaded.doc.state, op);
+  const doc: Document = {
+    ...loaded.doc,
+    ops: [...loaded.doc.ops, applied.op],
+    state: applied.state,
+    updatedAt: op.ts,
+  };
+  await appendOps(doc, [applied.op], { forceSnapshot: true });
+  return doc;
 }
 
 /** Ask the browser not to evict our storage under pressure. Returns whether it agreed. */

@@ -407,6 +407,8 @@ export type CreateOptions = {
   title?: string;
   /** Tracked changes on from the start (default true). */
   tracking?: boolean;
+  /** Include in the edits library (default false). */
+  libraryEligible?: boolean;
   idGen?: IdGen;
 };
 
@@ -423,13 +425,16 @@ export function createDocument(opts: CreateOptions): Document {
   const applied = applyOp(emptyState(), importOp, { idGen });
   const ops: Op[] = [applied.op];
   let state = applied.state;
-  if (opts.title) {
+  if (opts.title || opts.libraryEligible) {
     const metaOp: Op = {
       id: idGen(),
       type: 'set_meta',
       author: opts.author,
       ts,
-      patch: { title: opts.title },
+      patch: {
+        ...(opts.title ? { title: opts.title } : {}),
+        ...(opts.libraryEligible ? { libraryEligible: true } : {}),
+      },
     };
     state = applyOp(state, metaOp, { idGen }).state;
     ops.push(metaOp);

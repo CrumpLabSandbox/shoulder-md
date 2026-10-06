@@ -3,6 +3,8 @@ import { IDBFactory } from 'fake-indexeddb';
 import { openDB } from 'idb';
 import {
   appendOps,
+  appendToStored,
+  libraryEntries,
   createDoc,
   deleteDoc,
   listDocs,
@@ -127,5 +129,57 @@ describe('op-log store', () => {
     expect(loaded!.doc.ops.map((o) => o.type)).toEqual(['import', 'set_meta', 'set_tracking']);
     expect(loaded!.doc.createdAt).toBe('2026-10-05T10:00:00.000Z');
     expect((await listDocs())[0]).toMatchObject({ id: 'old1', title: 'Old doc', words: 5 });
+  });
+});
+
+describe('library persistence', () => {
+  it('stores library metadata, counts, and clean text for search', async () => {
+    const a = await createDoc({ text: 'Alpha text.', author: 'me', libraryEligible: true });
+    const b = await createDoc({ text: 'Beta text.', author: 'me' });
+    const updated = await appendToStored(b.id, {
+      id: 'm1',
+      type: 'set_meta',
+      author: 'me',
+      ts: new Date(Date.now() + 5000).toISOString(),
+      patch: { tags: ['paper'], status: 'final', libraryEligible: true },
+    });
+    expect(updated?.state.meta).toMatchObject({
+      tags: ['paper'],
+      status: 'final',
+      libraryEligible: true,
+    });
+    const entries = await libraryEntries();
+    expect(entries.map((e) => [e.id, e.libraryEligible, e.text])).toEqual([
+      [b.id, true, 'Beta text.'],
+      [a.id, true, 'Alpha text.'],
+    ]);
+    expect(entries[0]).toMatchObject({
+      status: 'final',
+      tags: ['paper'],
+      acceptedChanges: 0,
+      pendingChanges: 0,
+    });
+    // The stored op log replays to the same state.
+    expect((await loadDoc(b.id))!.doc.state).toEqual(updated!.state);
+  });
+
+  it('fills fields missing from headers written by older versions', async () => {
+    const doc = await createDoc({ text: 'Old header.', author: 'me' });
+    const raw = await openDB('shoulder-md', 2);
+    const header = await raw.get('docs', doc.id);
+    delete header.acceptedChanges;
+    delete header.status;
+    delete header.tags;
+    delete header.libraryEligible;
+    await raw.put('docs', header);
+    raw.close();
+    const [summary] = await listDocs();
+    expect(summary).toMatchObject({
+      acceptedChanges: 0,
+      status: 'draft',
+      tags: [],
+      libraryEligible: false,
+      title: 'Old header.',
+    });
   });
 });

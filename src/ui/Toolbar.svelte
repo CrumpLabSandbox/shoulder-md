@@ -24,6 +24,8 @@
     onundo,
     onredo,
     onexport,
+    libraryOpen,
+    ontogglelibrary,
   }: {
     title: string;
     layout: Layout;
@@ -46,6 +48,8 @@
     onundo: () => void;
     onredo: () => void;
     onexport: (kind: ExportKind) => void;
+    libraryOpen: boolean;
+    ontogglelibrary: () => void;
   } = $props();
 
   type ExportKind =
@@ -91,6 +95,12 @@
     >
       ☰
     </button>
+    <button
+      class:active={libraryOpen}
+      onclick={ontogglelibrary}
+      title="Library (⌘⌥L)"
+      aria-label="Library">Library</button
+    >
     <input
       class="title"
       type="text"

@@ -2,7 +2,7 @@
 
 A browser Markdown editor with Word-style tracked changes and comments, built on a sentence-level JSON model that records every edit and its reason. `plan.md` is the spec and roadmap; read its status line and the current phase before starting work. `idea.json` is the original seed.
 
-Status: phases 0–4 are built (editor, model and op log, tracked changes, comments, exports). Next is phase 5, the edits library (see `plan.md` §8 and §10).
+Status: phases 0–5 are built (editor, model and op log, tracked changes, comments, exports, edits library). Next is phase 6, local folder storage (see `plan.md` §5 and §10), then phase 7, Claude as editor (§9).
 
 ## Commands
 
@@ -28,6 +28,7 @@ src/editor/    CodeMirror setup, tracking extension, buffer sync.
 src/docs/      workspace.svelte.ts: the app's reactive store and all editing commands.
 src/persist/   IndexedDB op log + snapshots; debounced autosave.
 src/export/    Markdown/CriticMarkup, JSON (+ schema.json), docx, print/PDF.
+src/library/   Change-record dataset (records.ts) and per-document stats (stats.ts).
 src/ui/        Svelte components. App.svelte wires shortcuts and layout.
 src/settings/  Fonts catalog and appearance settings (localStorage).
 tests/         vitest. tests/helpers/model.ts is the model test harness.

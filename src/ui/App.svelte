@@ -13,18 +13,24 @@
   import DocumentList from './DocumentList.svelte';
   import Margin from './Margin.svelte';
   import StatusBar from './StatusBar.svelte';
+  import Library from './Library.svelte';
 
   const settings = createSettingsStore();
-  const ws = createWorkspace(loadAuthor());
+  const ws = createWorkspace(loadAuthor(), {
+    libraryDefault: () => settings.value.libraryDefault,
+  });
 
   let docsOpen = $state(false);
   let settingsOpen = $state(false);
   let marginOpen = $state(true);
+  let libraryOpen = $state(false);
   let editor: Editor | undefined = $state();
   let tick = $state(0);
 
   const layout = $derived(settings.value.layout);
-  const showMargin = $derived(marginOpen && layout !== 'preview' && ws.view === 'revision');
+  const showMargin = $derived(
+    marginOpen && !libraryOpen && layout !== 'preview' && ws.view === 'revision',
+  );
 
   function setLayout(l: Layout) {
     settings.set('layout', l);
@@ -62,6 +68,7 @@
         KeyP: () => ws.prevChange(),
         KeyM: () => (marginOpen = !marginOpen),
         KeyE: () => focusReason(),
+        KeyL: () => (libraryOpen = !libraryOpen),
         KeyC: () => {
           marginOpen = true;
           ws.startComment();
@@ -150,6 +157,8 @@
       editor?.focus();
     }}
     onexport={(kind) => void ws.exportAs(kind)}
+    {libraryOpen}
+    ontogglelibrary={() => (libraryOpen = !libraryOpen)}
   />
 
   <div class="body">
@@ -164,22 +173,35 @@
       />
     {/if}
 
-    <main class="panes layout-{layout}">
-      {#if ws.ready}
-        {#if layout !== 'preview'}
-          <div class="pane">
-            <Editor bind:this={editor} {ws} onscroll={() => tick++} />
-          </div>
+    {#if libraryOpen && ws.ready}
+      <Library
+        {ws}
+        libraryDefault={settings.value.libraryDefault}
+        onlibrarydefault={(v) => settings.set('libraryDefault', v)}
+        onopen={(id) => {
+          libraryOpen = false;
+          void ws.open(id);
+        }}
+        onclose={() => (libraryOpen = false)}
+      />
+    {:else}
+      <main class="panes layout-{layout}">
+        {#if ws.ready}
+          {#if layout !== 'preview'}
+            <div class="pane">
+              <Editor bind:this={editor} {ws} onscroll={() => tick++} />
+            </div>
+          {/if}
+          {#if layout !== 'editor'}
+            <div class="pane preview-pane">
+              <Preview text={ws.current ? ws.displayText : ''} />
+            </div>
+          {/if}
+        {:else}
+          <div class="loading">Opening…</div>
         {/if}
-        {#if layout !== 'editor'}
-          <div class="pane preview-pane">
-            <Preview text={ws.current ? ws.displayText : ''} />
-          </div>
-        {/if}
-      {:else}
-        <div class="loading">Opening…</div>
-      {/if}
-    </main>
+      </main>
+    {/if}
 
     {#if showMargin && ws.ready}
       <Margin

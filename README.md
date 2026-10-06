@@ -4,7 +4,7 @@ A browser-based Markdown editor that is growing Word-style tracked changes and c
 
 ## Status
 
-Phases 0 to 4 of the plan: a Markdown writing app with Word-style tracked changes and comments, on a sentence-level document model and op log, with exports.
+Phases 0 to 5 of the plan: a Markdown writing app with Word-style tracked changes and comments, on a sentence-level document model and op log, with exports and an edits library.
 
 - CodeMirror 6 editor with Markdown highlighting and a rendered preview (editor, split, or preview layouts).
 - Background autosave to the browser's IndexedDB on every change, with flushes on blur, tab hide, and unload.
@@ -14,6 +14,7 @@ Phases 0 to 4 of the plan: a Markdown writing app with Word-style tracked change
 - Track changes: turn it on and deletions stay struck through, insertions are underlined, and each change gets a card in the margin with author, time, before and after text, accept and reject, and an optional reason (free text, plus tag chips you can switch on in Settings). Accept all and Reject all sit at the top of the margin. Markup, clean, and original views. Undo and redo work on changes, not just text.
 - Comments: select text and press ⌘⌥C to open a thread in the margin, with replies, resolve and reopen, and threads attached to a change. Anchors follow the text through edits and undo; a thread whose text is removed is kept and marked as orphaned.
 - Exports: Markdown (clean, original, or with changes as CriticMarkup), Word with real tracked changes and threaded comments, the full JSON with its op log, and PDF through the print dialog. Markdown, CriticMarkup, and JSON files import as new documents.
+- Library (⌘⌥L): choose which documents join the edits library, set their status and tags, search them, and export every change as JSON lines with its sentence before and after, neighbouring sentences, reason, discussion, and whether it was accepted or rejected. Nothing joins the library unless you include it.
 
 Tracked changes, comments, exports, the edits library, and Claude as an editor come in later phases.
 
@@ -48,6 +49,7 @@ Pushes to `main` deploy to GitHub Pages via `.github/workflows/deploy.yml`.
 | ⌘⌥E                | Add a reason to the change at the cursor |
 | ⌘⌥C                | Comment on the selection                 |
 | ⌘⌥M                | Show or hide the margin                  |
+| ⌘⌥L                | Open or close the library                |
 | ⌘Z / ⌘⇧Z           | Undo / redo (through the model)          |
 
 ## License

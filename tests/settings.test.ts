@@ -61,6 +61,10 @@ describe('settings', () => {
     expect(sanitize({ ...DEFAULT_SETTINGS, showReasonTags: 'yes' as never }).showReasonTags).toBe(
       false,
     );
+    expect(DEFAULT_SETTINGS.libraryDefault).toBe(false);
+    expect(withChange(DEFAULT_SETTINGS, 'libraryDefault', true).preset).toBe(
+      DEFAULT_SETTINGS.preset,
+    );
   });
 
   it('switches preset to custom when a preset-controlled key changes', () => {

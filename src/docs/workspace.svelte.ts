@@ -3,10 +3,16 @@ import {
   createDoc,
   deleteDoc,
   importDocument,
+  appendToStored,
+  libraryEntries as storedLibraryEntries,
   listDocs,
   loadDoc,
   type DocSummary,
+  type LibraryEntry,
 } from '../persist/idb';
+import { docStats } from '../library/stats';
+import { changeRecords, toJsonl, type RecordOptions } from '../library/records';
+import type { DocMeta } from '../model/types';
 import { exportCriticMarkup, exportMarkdown, documentFromCriticMarkup } from '../export/markdown';
 import { exportJson, importJson } from '../export/json';
 import { downloadBlob, downloadText, slugify } from '../export/download';
@@ -15,7 +21,6 @@ import { createAutosave, type SaveStatus } from '../persist/autosave';
 import { displayTitle } from './title';
 import { authorColor } from './identity';
 import { nowIso, isoAt } from '../util/time';
-import { countWords } from '../util/text';
 import type { Author, Document, Op } from '../model/types';
 import { appendOp, revisionText } from '../model/apply';
 import {
@@ -66,7 +71,12 @@ type UndoEntry = {
 };
 
 /** Reactive workspace: the document list, the open document, its op log, autosave, and editing commands. */
-export function createWorkspace(initialAuthor: Author) {
+export type WorkspaceOptions = {
+  /** Whether new documents join the edits library. */
+  libraryDefault?: () => boolean;
+};
+
+export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions = {}) {
   let author = $state.raw<Author>(initialAuthor);
   // Raw state: replaced wholesale, never mutated in place, and the document goes to IndexedDB
   // as-is. A deep $state proxy would fail structured cloning.
@@ -127,20 +137,9 @@ export function createWorkspace(initialAuthor: Author) {
     save: async ({ doc, ops, force }) => {
       await appendOps(doc, ops, { forceSnapshot: force });
       lastSavedAt = Date.now();
-      const clean = viewText(doc.state, 'clean');
       docs = docs
         .map((d) =>
-          d.id === doc.id
-            ? {
-                ...d,
-                title: displayTitle(doc.state.meta.title, clean),
-                updatedAt: doc.updatedAt,
-                words: countWords(clean),
-                pendingChanges: Object.values(doc.state.changes).filter(
-                  (c) => c.status === 'pending',
-                ).length,
-              }
-            : d,
+          d.id === doc.id ? { ...d, ...docStats(doc.state), updatedAt: doc.updatedAt } : d,
         )
         .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
     },
@@ -198,6 +197,7 @@ export function createWorkspace(initialAuthor: Author) {
     const doc = await createDoc({
       author: author.id,
       tracking: current?.state.trackingOn ?? false,
+      libraryEligible: options.libraryDefault?.() ?? false,
     });
     await refreshList();
     await open(doc.id);
@@ -632,6 +632,7 @@ export function createWorkspace(initialAuthor: Author) {
         doc = documentFromCriticMarkup(text, {
           author: author.id,
           tracking: hasMarkup,
+          libraryEligible: options.libraryDefault?.() ?? false,
           title: stem,
         });
         importNotice = undefined;
@@ -643,6 +644,50 @@ export function createWorkspace(initialAuthor: Author) {
     const stored = await importDocument(doc);
     await refreshList();
     await open(stored.id);
+  }
+
+  /* ---------- the edits library ---------- */
+
+  /** All documents with clean text for search. Saves the open document first so it is current. */
+  async function libraryEntries(): Promise<LibraryEntry[]> {
+    await park();
+    return storedLibraryEntries();
+  }
+
+  /** Changes a document's library metadata (status, tags, inclusion), open or not. */
+  async function setDocMeta(id: string, patch: Partial<Omit<DocMeta, 'title'>>): Promise<void> {
+    const ts = nowIso();
+    const op: Op = { id: ulid(), type: 'set_meta', author: author.id, ts, patch };
+    if (current?.id === id) {
+      const r = push(op);
+      schedule([r.op], ts);
+      await autosave.flush();
+      return;
+    }
+    const doc = await appendToStored(id, JSON.parse(JSON.stringify(op)) as Op);
+    if (doc)
+      docs = docs.map((d) => (d.id === id ? { ...d, ...docStats(doc.state), updatedAt: ts } : d));
+  }
+
+  /**
+   * Downloads the change records of every document in the library as JSON lines.
+   * Returns how many documents and rows went in.
+   */
+  async function exportLibrary(opts: RecordOptions = {}): Promise<{ docs: number; rows: number }> {
+    await park();
+    const ids = (await storedLibraryEntries()).filter((e) => e.libraryEligible).map((e) => e.id);
+    const authorNames = { [author.id]: author.name };
+    let rows: ReturnType<typeof changeRecords> = [];
+    for (const id of ids) {
+      const doc = current?.id === id ? current : (await loadDoc(id))?.doc;
+      if (doc) rows = rows.concat(changeRecords(doc, { ...opts, authorNames }));
+    }
+    downloadText(
+      `shoulder-library-${nowIso().slice(0, 10)}.jsonl`,
+      toJsonl(rows),
+      'application/x-ndjson',
+    );
+    return { docs: ids.length, rows: rows.length };
   }
 
   function jumpTo(changeId: string) {
@@ -772,6 +817,9 @@ export function createWorkspace(initialAuthor: Author) {
     clearImportNotice: () => (importNotice = undefined),
     exportAs,
     importFile,
+    libraryEntries,
+    setDocMeta,
+    exportLibrary,
     startComment,
     cancelComment,
     addComment,

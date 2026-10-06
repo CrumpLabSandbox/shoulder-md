@@ -205,7 +205,13 @@ export function parseCriticMarkup(src: string, author = 'imported'): ParsedCriti
 /** Builds a new document from CriticMarkup: an import of the original text, one splice applying the marks, then the comments. */
 export function documentFromCriticMarkup(
   src: string,
-  opts: { author: string; title?: string; ts?: string; tracking?: boolean },
+  opts: {
+    author: string;
+    title?: string;
+    ts?: string;
+    tracking?: boolean;
+    libraryEligible?: boolean;
+  },
 ): Document {
   const parsed = parseCriticMarkup(src, opts.author);
   const ts = opts.ts ?? new Date().toISOString();
@@ -219,6 +225,7 @@ export function documentFromCriticMarkup(
     ts,
     title: opts.title,
     tracking: opts.tracking ?? true,
+    libraryEligible: opts.libraryEligible,
   });
   if (parsed.spans.some((s) => s.kind !== 'text')) {
     const records = Object.fromEntries(
