@@ -21,6 +21,8 @@ export type Settings = {
   libraryDefault: boolean;
   /** Which model Ask Claude requests ('' leaves it to Claude Code). Mac app only. */
   claudeModel: ClaudeModel;
+  /** Save each document's conversation with Claude next to it, as part of its history. */
+  saveChats: boolean;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -36,6 +38,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showReasonField: true,
   libraryDefault: false,
   claudeModel: '',
+  saveChats: true,
 };
 
 export type Preset = {
@@ -150,6 +153,7 @@ export function sanitize(s: Settings): Settings {
     showReasonField: typeof s.showReasonField === 'boolean' ? s.showReasonField : true,
     libraryDefault: typeof s.libraryDefault === 'boolean' ? s.libraryDefault : false,
     claudeModel: CLAUDE_MODELS.some((m) => m.id === s.claudeModel) ? s.claudeModel : '',
+    saveChats: typeof s.saveChats === 'boolean' ? s.saveChats : true,
   };
 }
 

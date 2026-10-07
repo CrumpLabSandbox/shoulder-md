@@ -35,7 +35,7 @@ pnpm app:build    # package release/mac-arm64/Shoulder.app
 
 Changes → Ask Claude to Suggest Edits… (or the Claude button in the toolbar) has Claude Code read the open document and its style guides and propose edits, which arrive as tracked changes.
 
-Changes → Chat with Claude (⌥⌘J) opens a conversation about the open document. Claude can answer questions without editing, suggest small tracked edits, or write a larger revision; a revision comes back as tracked changes that share one stated reason. A model menu chooses which Claude model runs the request.
+Changes → Chat with Claude (⌥⌘J) opens a conversation about the open document. Claude can answer questions without editing, suggest small tracked edits, or write a larger revision; a revision comes back as tracked changes that share one stated reason. A model menu chooses which Claude model runs the request. Conversations are saved next to each document as `<name>.chat.md` (Settings has a switch to turn this off).
 
 - This runs **your own Claude Code**. The app starts the `claude` program already installed on your Mac, in your shared folder. It signs nobody in, stores no credentials, and has no API key; it uses whatever account your Claude Code is signed in with, and that account's usage.
 - If Claude Code is not installed and signed in (`claude` in a terminal), the feature is unavailable and the app says so. Everything else works without it.

@@ -51,6 +51,14 @@ import {
   ProposalError,
   type Proposal,
 } from '../folder/proposals';
+import {
+  chatDivider,
+  chatEntry,
+  chatHeader,
+  chatSession,
+  parseChat,
+  type ChatMessage,
+} from '../folder/chat';
 import { nowIso, isoAt } from '../util/time';
 import type { Author, Document, Op, State } from '../model/types';
 import { appendOp, revisionText } from '../model/apply';
@@ -129,6 +137,8 @@ type UndoEntry = {
 export type WorkspaceOptions = {
   /** Whether new documents join the edits library. */
   libraryDefault?: () => boolean;
+  /** Whether conversations with Claude are saved next to each document. On unless this says no. */
+  saveChats?: () => boolean;
 };
 
 export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions = {}) {
@@ -256,6 +266,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     if (external && external.docId !== id) external = undefined;
     if (proposalOffer && proposalOffer.docId !== id) proposalOffer = undefined;
     if (revisionOffer && revisionOffer.docId !== id) revisionOffer = undefined;
+    void restoreChat(loaded.doc);
     void poll();
   }
 
@@ -860,9 +871,14 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     const kind = folderFor(doc.state.meta);
     const other: FolderKind = kind === 'shared' ? 'private' : 'shared';
     const otherSync = syncs[other];
+    let movedChat: string | undefined;
     if (otherSync && isConnected(other)) {
       try {
-        if (await otherSync.has(doc.id)) await otherSync.remove(doc.id);
+        if (await otherSync.has(doc.id)) {
+          // The conversation is part of the document's history: it moves with the document.
+          movedChat = await otherSync.chat(doc.id);
+          await otherSync.remove(doc.id);
+        }
       } catch (e) {
         folderFailed(other, e);
       }
@@ -872,6 +888,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     if (!force && external?.docId === doc.id) return; // waiting for the user to decide
     try {
       const r = await target.write(doc, { force });
+      if (movedChat && !(await target.chat(doc.id))) await target.appendChat(doc.id, '', movedChat);
       // Ask only if the browser has not moved on since this copy was queued. If it has, a newer
       // write is on its way and will apply the rule: the browser wins, the disk copy is kept.
       const movedOn = !current || !sameLog(current, doc) || autosave.status !== 'saved';
@@ -918,6 +935,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
         folderNotice = `Added ${found.length} ${found.length === 1 ? 'document' : 'documents'} from “${handle.name}”.`;
       }
       await writeAll();
+      void restoreChat(current);
       startPolling();
     } catch (e) {
       folderFailed(kind, e);
@@ -1317,12 +1335,40 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
 
   /* ---------- chatting with Claude Code about the open document ---------- */
 
-  type ChatMessage = { role: 'you' | 'claude' | 'error'; text: string };
   type Chat = { messages: ChatMessage[]; sessionId?: string; running: boolean; steps: string[] };
   const NO_CHAT: Chat = { messages: [], running: false, steps: [] };
   /** One conversation per document, kept while the app is open. */
   let chats = $state.raw<Record<string, Chat>>({});
   const chat = $derived<Chat>((current && chats[current.id]) || NO_CHAT);
+
+  const savingChats = () => options.saveChats?.() ?? true;
+
+  /** Adds to the document's saved conversation, when saving is on. Failures are not fatal. */
+  async function saveChat(doc: Document, addition: string): Promise<void> {
+    const sync = syncs[folderFor(doc.state.meta)];
+    if (!savingChats() || !sync) return;
+    const title = displayTitle(doc.state.meta.title, viewText(doc.state, 'clean'));
+    try {
+      await sync.appendChat(doc.id, addition, chatHeader(title));
+    } catch (e) {
+      console.warn('shoulder-md: could not save the conversation', e);
+    }
+  }
+
+  /** Brings back the saved conversation for a document that has none in memory yet. */
+  async function restoreChat(doc: Document | undefined): Promise<void> {
+    if (!doc || chats[doc.id] || !savingChats()) return;
+    const sync = syncs[folderFor(doc.state.meta)];
+    if (!sync) return;
+    try {
+      const file = await sync.chat(doc.id);
+      if (!file || chats[doc.id]) return;
+      const saved = parseChat(file);
+      if (saved.messages.length > 0) setChat(doc.id, () => ({ ...NO_CHAT, ...saved }));
+    } catch {
+      // No saved conversation we can read: start with none.
+    }
+  }
 
   function setChat(docId: string, f: (c: Chat) => Chat) {
     chats = { ...chats, [docId]: f(chats[docId] ?? NO_CHAT) };
@@ -1357,34 +1403,49 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     await autosave.flush();
     await folderWriter.flush();
     const file = await sync.fileName(id);
+    await saveChat(doc, chatEntry({ role: 'you', text }, nowIso()));
     const stop = bridge.claude.onEvent((e) => {
       if (e.kind === 'step')
         setChat(id, (c) => (c.running ? { ...c, steps: [...c.steps, e.text] } : c));
     });
-    let outcome: ClaudeEvent;
-    try {
-      outcome = file
-        ? await bridge.claude.chat(
-            (sync.dir as NativeDir).nativePath,
-            file,
-            text,
-            chats[id]?.sessionId,
-            model,
-          )
-        : { kind: 'error', text: 'This document has not been written to the shared folder yet.' };
-    } catch (e) {
-      outcome = { kind: 'error', text: e instanceof Error ? e.message : String(e) };
-    } finally {
-      stop();
-    }
+    const ask = async (sessionId?: string): Promise<ClaudeEvent> => {
+      if (!file)
+        return {
+          kind: 'error',
+          text: 'This document has not been written to the shared folder yet.',
+        };
+      try {
+        return await bridge.claude.chat(
+          (sync.dir as NativeDir).nativePath,
+          file,
+          text,
+          sessionId,
+          model,
+        );
+      } catch (e) {
+        return { kind: 'error', text: e instanceof Error ? e.message : String(e) };
+      }
+    };
+    const earlier = chats[id]?.sessionId;
+    let outcome = await ask(earlier);
+    // A saved conversation's session may no longer exist in Claude Code: start a fresh one.
+    if (
+      outcome.kind === 'error' &&
+      earlier &&
+      !/^Stopped|already working|not installed/.test(outcome.text)
+    )
+      outcome = await ask(undefined);
+    stop();
+    const reply: ChatMessage = {
+      role: outcome.kind === 'error' ? 'error' : 'claude',
+      text: outcome.text || (outcome.kind === 'error' ? 'Something went wrong.' : 'Done.'),
+    };
+    await saveChat(
+      doc,
+      chatEntry(reply, nowIso(), model) + (outcome.sessionId ? chatSession(outcome.sessionId) : ''),
+    );
     setChat(id, (c) => ({
-      messages: [
-        ...c.messages,
-        {
-          role: outcome.kind === 'error' ? 'error' : 'claude',
-          text: outcome.text || (outcome.kind === 'error' ? 'Something went wrong.' : 'Done.'),
-        },
-      ],
+      messages: [...c.messages, reply],
       running: false,
       steps: [],
       ...(outcome.sessionId
@@ -1950,7 +2011,9 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     },
     sendChat,
     clearChat: () => {
-      if (current && !chat.running) setChat(current.id, () => NO_CHAT);
+      if (!current || chat.running || chat.messages.length === 0) return;
+      void saveChat(current, chatDivider(nowIso()));
+      setChat(current.id, () => NO_CHAT);
     },
     get revisionOffer() {
       return revisionOffer;

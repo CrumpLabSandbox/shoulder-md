@@ -24,6 +24,7 @@
   const settings = createSettingsStore();
   const ws = createWorkspace(loadAuthor(), {
     libraryDefault: () => settings.value.libraryDefault,
+    saveChats: () => settings.value.saveChats,
   });
 
   let docsOpen = $state(false);

@@ -14,6 +14,7 @@
 import type { Document, Op } from '../model/types';
 import { exportJson, importJson } from '../export/json';
 import { PROPOSALS_EXT, REVISION_EXT, SKIPPED_EXT } from './proposals';
+import { CHAT_EXT } from './chat';
 import { slugify } from '../export/download';
 import { displayTitle } from '../docs/title';
 import { text as viewText } from '../model/views';
@@ -208,7 +209,9 @@ export class FolderSync {
   ): Promise<void> {
     const from = await this.at(old.folder);
     if (!from) return;
-    const carried = [PROPOSALS_EXT, SKIPPED_EXT, REVISION_EXT].map((ext) => old.base + ext);
+    const carried = [PROPOSALS_EXT, SKIPPED_EXT, REVISION_EXT, CHAT_EXT].map(
+      (ext) => old.base + ext,
+    );
     for (const name of await listFileNames(from))
       if (name.startsWith(`${old.base}.conflict-`)) carried.push(name);
     for (const name of carried) {
@@ -409,7 +412,7 @@ export class FolderSync {
       const name = rec.base + ext;
       if (await this.drop(rec.folder, name)) removed.push(name);
     }
-    for (const ext of [PROPOSALS_EXT, SKIPPED_EXT, REVISION_EXT])
+    for (const ext of [PROPOSALS_EXT, SKIPPED_EXT, REVISION_EXT, CHAT_EXT])
       await this.drop(rec.folder, rec.base + ext);
     await this.removeIfEmpty(rec.folder);
     await this.store.delete(docId);
@@ -459,6 +462,21 @@ export class FolderSync {
   async clearRevision(docId: string): Promise<void> {
     const rec = await this.store.get(docId);
     if (rec) await this.drop(rec.folder, rec.base + REVISION_EXT);
+  }
+
+  /** The saved conversation with Claude about a document, if there is one (see chat.ts). */
+  async chat(docId: string): Promise<string | undefined> {
+    const rec = await this.store.get(docId);
+    const handle = rec && (await this.fileAt(rec.folder, rec.base + CHAT_EXT));
+    return handle ? (await handle.getFile()).text() : undefined;
+  }
+
+  /** Adds to a document's saved conversation, starting the file with `header` if it is new. */
+  async appendChat(docId: string, addition: string, header: string): Promise<void> {
+    const rec = await this.store.get(docId);
+    if (!rec || rec.opCount < 0) return;
+    const existing = await this.chat(docId);
+    await this.put(rec.folder, rec.base + CHAT_EXT, (existing ?? header) + addition);
   }
 
   /** Whether this folder holds (or last held) the document's files. */

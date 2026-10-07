@@ -167,6 +167,18 @@
   </section>
 
   <section>
+    <h3>Claude</h3>
+    <label class="row">
+      <input
+        type="checkbox"
+        checked={s.saveChats}
+        onchange={(e) => store.set('saveChats', e.currentTarget.checked)}
+      />
+      <span>Save conversations with Claude next to each document</span>
+    </label>
+  </section>
+
+  <section>
     <h3>Identity</h3>
     <label>
       <span>Your name (on changes and comments)</span>
