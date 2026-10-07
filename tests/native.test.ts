@@ -37,6 +37,12 @@ function fakeDisk() {
       files.set(key(dir, name), e);
       return stat(e);
     },
+    readBytes: async (dir, name) => new TextEncoder().encode(files.get(key(dir, name))!.content),
+    writeBytes: async (dir, name, data) => {
+      const e = { content: new TextDecoder().decode(data), lastModified: ++clock };
+      files.set(key(dir, name), e);
+      return stat(e);
+    },
     mkdir: async (dir, name) => void dirs.add(key(dir, name)),
     remove: async (dir, name) => files.delete(key(dir, name)) || dirs.delete(key(dir, name)),
   };

@@ -10,6 +10,8 @@ export type NativeFs = {
   stat(dir: string, name: string): Promise<Stat | null>;
   read(dir: string, name: string): Promise<string>;
   write(dir: string, name: string, content: string): Promise<Stat>;
+  readBytes(dir: string, name: string): Promise<Uint8Array>;
+  writeBytes(dir: string, name: string, data: Uint8Array): Promise<Stat>;
   mkdir(dir: string, name: string): Promise<void>;
   /** Removes a file or an empty folder. False when there was nothing to remove. */
   remove(dir: string, name: string): Promise<boolean>;
@@ -48,6 +50,8 @@ export type ClaudeBridge = {
     sessionId?: string,
     model?: string,
   ): Promise<ClaudeEvent>;
+  /** Reads a genre's samples and writes suggested principles for its guide. */
+  draft(folder: string, guideFile: string, all?: boolean, model?: string): Promise<ClaudeEvent>;
   cancel(): Promise<void>;
   onEvent(handler: (event: ClaudeEvent) => void): () => void;
 };

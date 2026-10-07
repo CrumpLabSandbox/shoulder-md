@@ -1,6 +1,7 @@
 import type { DirHandleLike, FileHandleLike, FileLike } from '../../src/folder/fs';
 
-type Entry = { content: string; lastModified: number };
+type Entry = { content: string | Uint8Array<ArrayBuffer>; lastModified: number };
+const encode = (c: Entry['content']) => (typeof c === 'string' ? new TextEncoder().encode(c) : c);
 
 /**
  * An in-memory directory tree with the File System Access API shape the folder sync uses.
@@ -14,8 +15,10 @@ export function memoryDir(name = 'repo') {
 
   const fileLike = (e: Entry): FileLike => ({
     lastModified: e.lastModified,
-    size: new TextEncoder().encode(e.content).length,
-    text: async () => e.content,
+    size: encode(e.content).length,
+    text: async () =>
+      typeof e.content === 'string' ? e.content : new TextDecoder().decode(e.content),
+    arrayBuffer: async () => encode(e.content).slice().buffer,
   });
 
   const handle = (path: string, fname: string): FileHandleLike => ({
@@ -27,9 +30,10 @@ export function memoryDir(name = 'repo') {
       return fileLike(e);
     },
     async createWritable() {
-      let buf = '';
+      let buf: Entry['content'] = '';
       return {
-        write: async (d: string) => void (buf += d),
+        write: async (d) =>
+          void (buf = typeof d === 'string' && typeof buf === 'string' ? buf + d : d),
         close: async () => void files.set(path, { content: buf, lastModified: ++clock }),
       };
     },
@@ -75,7 +79,10 @@ export function memoryDir(name = 'repo') {
   return {
     dir: directory('', name),
     files,
-    read: (path: string) => files.get(path)?.content,
+    read: (path: string) => {
+      const c = files.get(path)?.content;
+      return c === undefined || typeof c === 'string' ? c : new TextDecoder().decode(c);
+    },
     /** An edit made by another program. Parent folders are created as needed. */
     writeOutside: (path: string, content: string) => {
       const parts = path.split('/');

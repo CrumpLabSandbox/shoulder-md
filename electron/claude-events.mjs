@@ -13,11 +13,19 @@ function describeTool(name, input = {}) {
   if ((name === 'Write' || name === 'Edit') && file)
     return `Writing ${String(file).split('/').pop()}`;
   if (name === 'Bash' && input.command)
-    return /shoulder\.mjs\s+check/.test(input.command)
-      ? 'Checking the proposals'
-      : /shoulder\.mjs\s+context/.test(input.command)
-        ? 'Finding the guides that apply'
-        : `Running ${clip(input.command, 60)}`;
+    return /guide\.mjs\s+samples/.test(input.command)
+      ? 'Finding the samples to read'
+      : /guide\.mjs\s+check/.test(input.command)
+        ? 'Checking the suggestions'
+        : /guide\.mjs\s+done/.test(input.command)
+          ? 'Recording the samples as read'
+          : /^textutil\b/.test(input.command)
+            ? 'Reading a Word file'
+            : /shoulder\.mjs\s+check/.test(input.command)
+              ? 'Checking the proposals'
+              : /shoulder\.mjs\s+context/.test(input.command)
+                ? 'Finding the guides that apply'
+                : `Running ${clip(input.command, 60)}`;
   if ((name === 'Glob' || name === 'Grep') && file) return `Searching for ${clip(file, 60)}`;
   return `Using ${name}`;
 }
@@ -132,5 +140,38 @@ export function chatArgs(docFile, message, sessionId, model) {
   args.push('--append-system-prompt', chatSystemPrompt(docFile));
   if (model && CLAUDE_MODELS.includes(model)) args.push('--model', model);
   args.push('--allowedTools', ...CHAT_TOOLS);
+  return args;
+}
+
+/* ---------- drafting a guide from samples ---------- */
+
+/** Reading samples (Word files through macOS's own converter) and writing one suggestions file. */
+export const GUIDE_TOOLS = [
+  'Read',
+  'Glob',
+  'Grep',
+  'Write(/Style/Guides/*.principles.json)',
+  'Edit(/Style/Guides/*.principles.json)',
+  'Bash(node .claude/skills/draft-principles/guide.mjs:*)',
+  'Bash(textutil -convert txt -stdout:*)',
+];
+
+export function guidePrompt(guideFile, all) {
+  return (
+    `Follow the instructions in .claude/skills/draft-principles/SKILL.md for the style guide ` +
+    `"${guideFile}" in this folder. The skill's helper script is ` +
+    `.claude/skills/draft-principles/guide.mjs. ` +
+    (all ? 'Read every sample again (pass --all to the samples command). ' : '') +
+    `You are running unattended inside the author's writing app: do not ask questions. If ` +
+    `something is ambiguous, make the conservative choice and say so at the end. Write only ` +
+    `the suggestions file (the helper writes its own record). Finish with a short summary for ` +
+    `the author.`
+  );
+}
+
+export function guideArgs(guideFile, all, model) {
+  const args = ['-p', guidePrompt(guideFile, all), '--output-format', 'stream-json', '--verbose'];
+  if (model && CLAUDE_MODELS.includes(model)) args.push('--model', model);
+  args.push('--allowedTools', ...GUIDE_TOOLS);
   return args;
 }

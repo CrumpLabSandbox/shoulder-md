@@ -49,6 +49,18 @@
     }
   });
 
+  /** Image files in a drop or paste are saved beside the document and linked at the cursor. */
+  function takeImages(e: DragEvent | ClipboardEvent) {
+    const data = 'dataTransfer' in e ? e.dataTransfer : e.clipboardData;
+    const images = [...(data?.files ?? [])].filter((f) => f.type.startsWith('image/'));
+    if (images.length === 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    void (async () => {
+      for (const file of images) if (!(await ws.addImage(file))) break;
+    })();
+  }
+
   export function focus() {
     bridge?.focus();
   }
@@ -58,7 +70,13 @@
   }
 </script>
 
-<div class="editor-host" bind:this={host}></div>
+<div
+  class="editor-host"
+  bind:this={host}
+  ondropcapture={takeImages}
+  onpastecapture={takeImages}
+  role="presentation"
+></div>
 
 <style>
   .editor-host {

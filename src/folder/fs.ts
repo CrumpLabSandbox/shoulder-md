@@ -12,10 +12,12 @@ export interface FileLike {
   readonly lastModified: number;
   readonly size: number;
   text(): Promise<string>;
+  /** The file's bytes, for images. */
+  arrayBuffer(): Promise<ArrayBuffer>;
 }
 
 export interface WritableLike {
-  write(data: string): Promise<void>;
+  write(data: string | Uint8Array<ArrayBuffer>): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -99,4 +101,15 @@ export async function listFileNames(dir: DirHandleLike): Promise<string[]> {
   const names: string[] = [];
   for await (const entry of dir.values()) if (entry.kind === 'file') names.push(entry.name);
   return names;
+}
+
+export async function writeBytes(
+  dir: DirHandleLike,
+  name: string,
+  data: Uint8Array<ArrayBuffer>,
+): Promise<void> {
+  const handle = await dir.getFileHandle(name, { create: true });
+  const w = await handle.createWritable();
+  await w.write(data);
+  await w.close();
 }

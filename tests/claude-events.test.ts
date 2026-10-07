@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   ALLOWED_TOOLS,
   CHAT_TOOLS,
+  GUIDE_TOOLS,
+  guideArgs,
   CLAUDE_MODELS,
   chatArgs,
   chatSystemPrompt,
@@ -123,6 +125,23 @@ describe('Claude Code output', () => {
     expect(CHAT_TOOLS.filter((t) => !ALLOWED_TOOLS.includes(t))).toEqual([
       'Write(/**/*.revision.md)',
       'Edit(/**/*.revision.md)',
+    ]);
+  });
+
+  it('drafts a guide with its own narrow allow-list', () => {
+    const args = guideArgs('Style/Guides/grants.md', true, 'sonnet');
+    expect(args[1]).toContain('"Style/Guides/grants.md"');
+    expect(args[1]).toContain('--all');
+    expect(guideArgs('Style/Guides/grants.md')[1]).not.toContain('--all');
+    expect(args.slice(args.indexOf('--allowedTools') + 1)).toEqual(GUIDE_TOOLS);
+    // It may write the suggestions file and nothing else; samples are read-only to it.
+    expect(GUIDE_TOOLS.filter((t) => /^(Write|Edit)/.test(t))).toEqual([
+      'Write(/Style/Guides/*.principles.json)',
+      'Edit(/Style/Guides/*.principles.json)',
+    ]);
+    expect(GUIDE_TOOLS.filter((t) => t.startsWith('Bash'))).toEqual([
+      'Bash(node .claude/skills/draft-principles/guide.mjs:*)',
+      'Bash(textutil -convert txt -stdout:*)',
     ]);
   });
 

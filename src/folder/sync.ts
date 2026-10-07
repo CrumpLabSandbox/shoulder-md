@@ -15,10 +15,18 @@ import type { Document, Op } from '../model/types';
 import { exportJson, importJson } from '../export/json';
 import { PROPOSALS_EXT, REVISION_EXT, SKIPPED_EXT } from './proposals';
 import { CHAT_EXT } from './chat';
+import { SUGGESTIONS_EXT } from '../guides/suggest';
 import { slugify } from '../export/download';
 import { displayTitle } from '../docs/title';
 import { text as viewText } from '../model/views';
-import { fileIfExists, listFileNames, writeFile, type DirHandleLike, type FileLike } from './fs';
+import {
+  fileIfExists,
+  listFileNames,
+  writeBytes,
+  writeFile,
+  type DirHandleLike,
+  type FileLike,
+} from './fs';
 
 /** Where a document's files live inside the folder, as a relative path; undefined is the top. */
 export type Layout = (doc: Document, base: string) => string | undefined;
@@ -26,6 +34,21 @@ export type Layout = (doc: Document, base: string) => string | undefined;
 export const DOCUMENTS = 'Documents';
 export const GUIDES = 'Style/Guides';
 export const SAMPLES = 'Style/Samples';
+/** Images and other attachments of one document, inside its own folder. */
+export const ASSETS = 'assets';
+
+export type Asset = { name: string; bytes: Uint8Array<ArrayBuffer> };
+
+/** A safe file name for an attachment: no folders, no leading dots, nothing exotic. */
+export function assetName(name: string): string {
+  const cleaned = name
+    .normalize('NFKD')
+    .replace(/[^\w.\- ]+/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/^\.+/, '');
+  return cleaned.slice(-80) || 'image';
+}
 
 /** One folder per document under Documents/, and all style guides together in Style/Guides/. */
 export const STRUCTURED: Layout = (doc, base) =>
@@ -225,7 +248,44 @@ export class FolderSync {
       await from.removeEntry(name);
     }
     for (const ext of [MD, JSON_EXT]) await this.drop(old.folder, old.base + ext);
+    await this.moveAssets(old.folder, now.folder);
     await this.removeIfEmpty(old.folder);
+  }
+
+  /** Where a document's attachments are kept; only documents with a folder of their own have any. */
+  private assetsIn(folder: string | undefined): string | undefined {
+    return folder?.startsWith(DOCUMENTS + '/') ? `${folder}/${ASSETS}` : undefined;
+  }
+
+  private async readAssets(folder: string | undefined): Promise<Asset[]> {
+    const where = this.assetsIn(folder);
+    const dir = where && (await this.at(where));
+    if (!dir) return [];
+    const out: Asset[] = [];
+    for (const name of await listFileNames(dir)) {
+      const h = await fileIfExists(dir, name);
+      if (h) out.push({ name, bytes: new Uint8Array(await (await h.getFile()).arrayBuffer()) });
+    }
+    return out;
+  }
+
+  /** Removes a document's attachments and their folder. */
+  private async dropAssets(folder: string | undefined): Promise<void> {
+    const where = this.assetsIn(folder);
+    const dir = where && (await this.at(where));
+    if (!dir) return;
+    for (const name of await listFileNames(dir)) await dir.removeEntry(name);
+    for await (const entry of dir.values()) if (entry) return; // something else is in there
+    await (await this.at(folder))?.removeEntry(ASSETS);
+  }
+
+  private async moveAssets(from: string | undefined, to: string | undefined): Promise<void> {
+    const target = this.assetsIn(to);
+    if (from === to) return;
+    const assets = await this.readAssets(from);
+    if (target)
+      for (const a of assets) await writeBytes((await this.at(target, true))!, a.name, a.bytes);
+    await this.dropAssets(from);
   }
 
   /** Removes a document's own folder once nothing is left in it. Shared folders are kept. */
@@ -412,8 +472,9 @@ export class FolderSync {
       const name = rec.base + ext;
       if (await this.drop(rec.folder, name)) removed.push(name);
     }
-    for (const ext of [PROPOSALS_EXT, SKIPPED_EXT, REVISION_EXT, CHAT_EXT])
+    for (const ext of [PROPOSALS_EXT, SKIPPED_EXT, REVISION_EXT, CHAT_EXT, SUGGESTIONS_EXT])
       await this.drop(rec.folder, rec.base + ext);
+    await this.dropAssets(rec.folder);
     await this.removeIfEmpty(rec.folder);
     await this.store.delete(docId);
     return removed;
@@ -448,6 +509,24 @@ export class FolderSync {
     await this.drop(rec.folder, rec.base + PROPOSALS_EXT);
   }
 
+  /** Suggested principles waiting next to a guide, if any (see guides/suggest.ts). */
+  async suggestions(
+    docId: string,
+  ): Promise<{ file: string; text: string; key: string } | undefined> {
+    const rec = await this.store.get(docId);
+    if (!rec) return undefined;
+    const file = rec.base + SUGGESTIONS_EXT;
+    const handle = await this.fileAt(rec.folder, file);
+    if (!handle) return undefined;
+    const f = await handle.getFile();
+    return { file, text: await f.text(), key: `${docId}:${f.lastModified}:${f.size}` };
+  }
+
+  async clearSuggestions(docId: string): Promise<void> {
+    const rec = await this.store.get(docId);
+    if (rec) await this.drop(rec.folder, rec.base + SUGGESTIONS_EXT);
+  }
+
   /** A revised copy of the document waiting next to it, if any (see proposals.ts). */
   async revision(docId: string): Promise<{ file: string; text: string; key: string } | undefined> {
     const rec = await this.store.get(docId);
@@ -462,6 +541,56 @@ export class FolderSync {
   async clearRevision(docId: string): Promise<void> {
     const rec = await this.store.get(docId);
     if (rec) await this.drop(rec.folder, rec.base + REVISION_EXT);
+  }
+
+  /** Every attachment of a document, for carrying them when it moves to another folder. */
+  async assets(docId: string): Promise<Asset[]> {
+    return this.readAssets((await this.store.get(docId))?.folder);
+  }
+
+  /**
+   * Saves an attachment in the document's `assets` folder and returns the path to use in the
+   * Markdown (`assets/<name>`). An existing file with the same bytes is reused; a different
+   * one with the same name is kept, and the new one gets a numbered name. Undefined when the
+   * document has no folder of its own yet.
+   */
+  async saveAsset(
+    docId: string,
+    name: string,
+    bytes: Uint8Array<ArrayBuffer>,
+  ): Promise<string | undefined> {
+    const rec = await this.store.get(docId);
+    const where = rec && rec.opCount >= 0 ? this.assetsIn(rec.folder) : undefined;
+    if (!where) return undefined;
+    const dir = (await this.at(where, true))!;
+    const wanted = assetName(name);
+    const dot = wanted.lastIndexOf('.');
+    const [stem, ext] = dot > 0 ? [wanted.slice(0, dot), wanted.slice(dot)] : [wanted, ''];
+    for (let i = 1; ; i++) {
+      const candidate = i === 1 ? wanted : `${stem}-${i}${ext}`;
+      const existing = await fileIfExists(dir, candidate);
+      if (existing) {
+        const have = new Uint8Array(await (await existing.getFile()).arrayBuffer());
+        const same = have.length === bytes.length && have.every((b, k) => b === bytes[k]);
+        if (!same) continue;
+      } else {
+        await writeBytes(dir, candidate, bytes);
+      }
+      return `${ASSETS}/${candidate}`;
+    }
+  }
+
+  /** The bytes of an attachment named by its path in the Markdown (`assets/<name>`). */
+  async asset(docId: string, ref: string): Promise<Uint8Array<ArrayBuffer> | undefined> {
+    const rec = await this.store.get(docId);
+    const where = this.assetsIn(rec?.folder);
+    const name = ref.startsWith(ASSETS + '/')
+      ? decodeURIComponent(ref.slice(ASSETS.length + 1))
+      : '';
+    if (!where || !name || name.includes('/') || name.startsWith('.')) return undefined;
+    const dir = await this.at(where);
+    const handle = dir && (await fileIfExists(dir, name));
+    return handle ? new Uint8Array(await (await handle.getFile()).arrayBuffer()) : undefined;
   }
 
   /** The saved conversation with Claude about a document, if there is one (see chat.ts). */

@@ -6,7 +6,7 @@ import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { chatArgs, claudeArgs, eventsFromLine, takeLines } from './claude-events.mjs';
+import { chatArgs, claudeArgs, eventsFromLine, guideArgs, takeLines } from './claude-events.mjs';
 
 const run = (file, args, opts = {}) =>
   new Promise((resolve) => {
@@ -55,12 +55,18 @@ export async function claudeStatus() {
   return { available: true, version: version.split('\n')[0] || undefined };
 }
 
-/** Puts the current propose-edits skill into the folder, where Claude Code will read it. */
-async function installSkill(skillSource, folder) {
-  const target = path.join(folder, '.claude', 'skills', 'propose-edits');
-  await fs.mkdir(target, { recursive: true });
-  for (const name of ['SKILL.md', 'shoulder.mjs'])
-    await fs.writeFile(path.join(target, name), await fs.readFile(path.join(skillSource, name)));
+/** Puts the app's current skills into the folder, where Claude Code will read them. */
+async function installSkills(skillsSource, folder) {
+  for (const entry of await fs.readdir(skillsSource, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const target = path.join(folder, '.claude', 'skills', entry.name);
+    await fs.mkdir(target, { recursive: true });
+    for (const name of await fs.readdir(path.join(skillsSource, entry.name)))
+      await fs.writeFile(
+        path.join(target, name),
+        await fs.readFile(path.join(skillsSource, entry.name, name)),
+      );
+  }
 }
 
 let running;
@@ -70,11 +76,11 @@ let running;
  * `onEvent`. Resolves with the final event, which is always 'done' or 'error'. (The outcome is
  * returned rather than sent as an event, because a reply and an event can arrive out of order.)
  */
-async function runClaude({ folder, args, skillSource, onEvent }) {
+async function runClaude({ folder, args, skillsSource, onEvent }) {
   if (running) return { kind: 'error', text: 'Claude is already working on a document.' };
   const bin = await findClaude();
   if (!bin) return { kind: 'error', text: 'Claude Code is not installed on this Mac.' };
-  await installSkill(skillSource, folder);
+  await installSkills(skillsSource, folder);
   return new Promise((resolve) => {
     let finished = false;
     const finish = (event) => {
@@ -123,14 +129,19 @@ async function runClaude({ folder, args, skillSource, onEvent }) {
 }
 
 /** Asks for per-edit proposals on one document (the propose-edits skill, one shot). */
-export function askClaude({ folder, docFile, note, model, skillSource, onEvent }) {
-  return runClaude({ folder, args: claudeArgs(docFile, note, model), skillSource, onEvent });
+export function askClaude({ folder, docFile, note, model, skillsSource, onEvent }) {
+  return runClaude({ folder, args: claudeArgs(docFile, note, model), skillsSource, onEvent });
+}
+
+/** Reads a genre's samples and writes suggested principles for its guide (draft-principles). */
+export function draftGuide({ folder, guideFile, all, model, skillsSource, onEvent }) {
+  return runClaude({ folder, args: guideArgs(guideFile, all, model), skillsSource, onEvent });
 }
 
 /** One turn of a conversation about a document; `sessionId` continues an earlier turn. */
-export function chatClaude({ folder, docFile, message, sessionId, model, skillSource, onEvent }) {
+export function chatClaude({ folder, docFile, message, sessionId, model, skillsSource, onEvent }) {
   const args = chatArgs(docFile, message, sessionId, model);
-  return runClaude({ folder, args, skillSource, onEvent });
+  return runClaude({ folder, args, skillsSource, onEvent });
 }
 
 export function cancelClaude() {

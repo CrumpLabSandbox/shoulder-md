@@ -32,6 +32,7 @@ export function menuTemplate(send, appName) {
       submenu: [
         item('New Document', 'new', 'Cmd+N'),
         item('Import…', 'import', 'Cmd+O'),
+        item('Insert Image…', 'insert-image', 'Shift+Cmd+I'),
         sep,
         item('Documents', 'documents', 'Shift+Cmd+D'),
         item('Library', 'library', 'Alt+Cmd+L'),
@@ -102,6 +103,7 @@ export function menuTemplate(send, appName) {
         sep,
         item('Ask Claude to Suggest Edits…', 'ask-claude', 'Alt+Cmd+K'),
         item('Chat with Claude', 'chat', 'Alt+Cmd+J'),
+        item('Draft Principles from Samples…', 'draft-principles'),
         sep,
         item('Add a Reason', 'reason', 'Alt+Cmd+E'),
         item('Comment on Selection', 'comment', 'Alt+Cmd+C'),

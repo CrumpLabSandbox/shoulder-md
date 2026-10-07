@@ -116,6 +116,7 @@
     settings: () => (settingsOpen = !settingsOpen),
     new: () => void ws.create(),
     import: () => importInput?.click(),
+    'insert-image': () => imageInput?.click(),
     documents: () => (docsOpen = !docsOpen),
     library: () => (libraryOpen = !libraryOpen),
     save: () => void ws.flush(),
@@ -147,6 +148,7 @@
     'reject-all': () => ws.rejectAll(),
     'ask-claude': () => (claudeOpen = true),
     chat: () => (chatOpen = !chatOpen),
+    'draft-principles': () => (claudeOpen = true),
     reason: () => focusReason(),
     comment: () => {
       marginOpen = true;
@@ -154,6 +156,7 @@
     },
   };
   let importInput: HTMLInputElement | undefined = $state();
+  let imageInput: HTMLInputElement | undefined = $state();
   let claudeOpen = $state(false);
   let chatOpen = $state(false);
   const inApp = !!appBridge();
@@ -181,6 +184,19 @@
 </script>
 
 <svelte:window onkeydown={onKeydown} />
+
+<!-- File > Insert Image… in the Mac app; images can also be dropped or pasted into the editor. -->
+<input
+  bind:this={imageInput}
+  type="file"
+  accept="image/*"
+  hidden
+  onchange={(e) => {
+    const f = e.currentTarget.files?.[0];
+    if (f) void ws.addImage(f);
+    e.currentTarget.value = '';
+  }}
+/>
 
 <!-- File > Import… in the Mac app; the Documents panel has its own button. -->
 <input
@@ -242,7 +258,7 @@
   </Toolbar>
 
   {#if ws.ready && ws.currentGuide && !libraryOpen}
-    <GuideBanner {ws} />
+    <GuideBanner {ws} ondraft={inApp ? () => (claudeOpen = true) : undefined} />
   {/if}
 
   <div class="body">
@@ -278,7 +294,10 @@
           {/if}
           {#if layout !== 'editor'}
             <div class="pane preview-pane">
-              <Preview text={ws.current ? ws.displayText : ''} />
+              <Preview
+                text={ws.current ? ws.displayText : ''}
+                resolve={(ref) => ws.assetUrl(ref)}
+              />
             </div>
           {/if}
         {:else}
@@ -371,6 +390,22 @@
           >Show as tracked changes</button
         >
         <button onclick={() => void ws.discardProposals()}>Discard</button>
+      </span>
+    </div>
+  {/if}
+
+  {#if ws.suggestionOffer && !ws.external}
+    {@const n = ws.suggestionOffer.principles.length}
+    <div class="notice external" role="alert">
+      <span>
+        Claude suggested {n}
+        {n === 1 ? 'principle' : 'principles'} for this guide, from your samples.
+      </span>
+      <span class="actions">
+        <button class="primary" onclick={() => void ws.applySuggestions()}
+          >Show as tracked changes</button
+        >
+        <button onclick={() => void ws.discardSuggestions()}>Discard</button>
       </span>
     </div>
   {/if}

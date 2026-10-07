@@ -1,7 +1,14 @@
 <script lang="ts">
   import type { Workspace } from '../docs/workspace.svelte';
 
-  let { ws }: { ws: Workspace } = $props();
+  let {
+    ws,
+    ondraft,
+  }: {
+    ws: Workspace;
+    /** Opens the panel that drafts principles from samples; only given in the Mac app. */
+    ondraft?: () => void;
+  } = $props();
 
   const guide = $derived(ws.currentGuide);
   const count = $derived(guide?.principles.length ?? 0);
@@ -28,6 +35,13 @@
         disabled={ws.view !== 'revision'}
         title="Adds the next free id to each top-level list item that has none"
         >Give {waiting === 1 ? 'it an id' : 'them ids'}</button
+      >
+    {/if}
+    {#if ondraft && guide.role === 'genre'}
+      <button
+        onclick={ondraft}
+        title="Have Claude Code read Style/Samples for this genre and suggest principles"
+        >Draft principles from samples…</button
       >
     {/if}
     <span class="help"

@@ -17,7 +17,7 @@ import {
   type FolderKind,
   type LibraryEntry,
 } from '../persist/idb';
-import { FolderSync, type External } from '../folder/sync';
+import { FolderSync, type Asset, type External } from '../folder/sync';
 import { folderSupported, permissionOf, pickFolder, type DirHandleLike } from '../folder/fs';
 import { reviveHandle, sameNativeFolder, storableHandle, type NativeDir } from '../folder/native';
 import { appBridge, type ClaudeEvent } from '../app/bridge';
@@ -59,6 +59,12 @@ import {
   parseChat,
   type ChatMessage,
 } from '../folder/chat';
+import {
+  parseSuggestions,
+  placeSuggestions,
+  suggestionOps,
+  type Suggestion,
+} from '../guides/suggest';
 import { nowIso, isoAt } from '../util/time';
 import type { Author, Document, Op, State } from '../model/types';
 import { appendOp, revisionText } from '../model/apply';
@@ -266,7 +272,9 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     if (external && external.docId !== id) external = undefined;
     if (proposalOffer && proposalOffer.docId !== id) proposalOffer = undefined;
     if (revisionOffer && revisionOffer.docId !== id) revisionOffer = undefined;
+    if (suggestionOffer && suggestionOffer.docId !== id) suggestionOffer = undefined;
     void restoreChat(loaded.doc);
+    forgetAssetUrls();
     void poll();
   }
 
@@ -757,9 +765,9 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
         return downloadBlob(`${stem}.docx`, blob);
       }
       case 'print-clean':
-        return printDocument(printHtml(doc.state, 'clean', authors), title);
+        return printDocument(await withAssets(printHtml(doc.state, 'clean', authors)), title);
       case 'print-markup':
-        return printDocument(printHtml(doc.state, 'markup', authors), title);
+        return printDocument(await withAssets(printHtml(doc.state, 'markup', authors)), title);
     }
   }
 
@@ -820,6 +828,11 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     { docId: string; file: string; key: string; text: string; reason?: string } | undefined
   >(undefined);
   let revisionSeen = '';
+  /** Principles Claude Code suggested for the open guide, waiting to be shown as changes. */
+  let suggestionOffer = $state.raw<
+    { docId: string; file: string; key: string; principles: Suggestion[] } | undefined
+  >(undefined);
+  let suggestionsSeen = '';
   const syncs: Record<FolderKind, FolderSync | undefined> = {
     shared: undefined,
     private: undefined,
@@ -872,11 +885,13 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     const other: FolderKind = kind === 'shared' ? 'private' : 'shared';
     const otherSync = syncs[other];
     let movedChat: string | undefined;
+    let movedAssets: Asset[] = [];
     if (otherSync && isConnected(other)) {
       try {
         if (await otherSync.has(doc.id)) {
           // The conversation is part of the document's history: it moves with the document.
           movedChat = await otherSync.chat(doc.id);
+          movedAssets = await otherSync.assets(doc.id);
           await otherSync.remove(doc.id);
         }
       } catch (e) {
@@ -889,6 +904,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     try {
       const r = await target.write(doc, { force });
       if (movedChat && !(await target.chat(doc.id))) await target.appendChat(doc.id, '', movedChat);
+      for (const a of movedAssets) await target.saveAsset(doc.id, a.name, a.bytes);
       // Ask only if the browser has not moved on since this copy was queued. If it has, a newer
       // write is on its way and will apply the rule: the browser wins, the disk copy is kept.
       const movedOn = !current || !sameLog(current, doc) || autosave.status !== 'saved';
@@ -1074,6 +1090,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       else if (kind === 'shared') {
         await checkProposals(sync, doc);
         await checkRevision(sync, doc);
+        await checkSuggestions(sync, doc);
       }
     } catch (e) {
       folderFailed(kind, e);
@@ -1122,6 +1139,85 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       key: found.key,
       ...parseRevision(found.text),
     };
+  }
+
+  async function checkSuggestions(sync: FolderSync, doc: Document): Promise<void> {
+    if (!doc.state.meta.guide) return;
+    const found = await sync.suggestions(doc.id);
+    if (current?.id !== doc.id) return;
+    if (!found) {
+      if (suggestionOffer?.docId === doc.id) suggestionOffer = undefined;
+      return;
+    }
+    if (found.key === suggestionOffer?.key || found.key === suggestionsSeen) return;
+    try {
+      const file = parseSuggestions(found.text);
+      if (file.document && file.document !== doc.id)
+        throw new Error('it was written for another guide');
+      if (file.principles.length === 0) throw new Error('it has no principles in it');
+      suggestionOffer = {
+        docId: doc.id,
+        file: found.file,
+        key: found.key,
+        principles: file.principles,
+      };
+    } catch (e) {
+      suggestionsSeen = found.key;
+      suggestionOffer = undefined;
+      folderNotice = `${found.file} could not be used: ${e instanceof Error ? e.message : String(e)}.`;
+    }
+  }
+
+  /**
+   * Adds Claude's suggested principles to the open guide, each as its own tracked insertion
+   * with its reason, as one undo step. New principles have no id until "Give them ids".
+   */
+  async function applySuggestions(): Promise<void> {
+    const offer = suggestionOffer;
+    if (!offer || !current || current.id !== offer.docId) return;
+    suggestionOffer = undefined;
+    suggestionsSeen = offer.key;
+    const { placed, skipped } = placeSuggestions(
+      viewText(current.state, 'clean'),
+      offer.principles,
+    );
+    if (placed.length > 0) {
+      if (view !== 'revision') setView('revision');
+      const sel = bridge?.getSelection() ?? { anchor: 0, head: 0 };
+      const inverse = applyModelOps(
+        suggestionOps(placed, { author: CLAUDE_AUTHOR, ts: nowIso(), id: ulid }),
+      );
+      recordUndo({
+        ops: inverse,
+        before: sel,
+        after: bridge?.getSelection() ?? sel,
+        at: Date.now(),
+      });
+      await autosave.flush();
+    }
+    try {
+      await syncs.shared?.clearSuggestions(offer.docId);
+    } catch (e) {
+      folderFailed('shared', e);
+    }
+    const n = placed.length;
+    folderNotice =
+      `Added ${n} suggested ${n === 1 ? 'principle' : 'principles'} as tracked changes. Accept the ones you agree with, then give them ids.` +
+      (skipped.length
+        ? ` ${skipped.length} already in the guide ${skipped.length === 1 ? 'was' : 'were'} left out.`
+        : '');
+  }
+
+  async function discardSuggestions(): Promise<void> {
+    const offer = suggestionOffer;
+    if (!offer) return;
+    suggestionOffer = undefined;
+    suggestionsSeen = offer.key;
+    try {
+      await syncs.shared?.clearSuggestions(offer.docId);
+    } catch (e) {
+      folderFailed('shared', e);
+    }
   }
 
   /**
@@ -1253,6 +1349,89 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     }
   }
 
+  /* ---------- images ---------- */
+
+  // Images live in the document's own `assets` folder on disk, not in the app's storage, so
+  // they need a synced folder. The Markdown refers to them as `assets/<name>`.
+  let assetUrls: Record<string, string> = {};
+
+  function forgetAssetUrls() {
+    for (const url of Object.values(assetUrls)) URL.revokeObjectURL(url);
+    assetUrls = {};
+  }
+
+  const IMAGE_TYPES: Record<string, string> = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    svg: 'image/svg+xml',
+    avif: 'image/avif',
+  };
+
+  /**
+   * Saves an image next to the open document and types its Markdown at the cursor. Returns
+   * false (with a notice saying why) when the document has no folder to keep it in.
+   */
+  async function addImage(file: File): Promise<boolean> {
+    const doc = current;
+    if (!doc || view !== 'revision') return false;
+    const kind = folderFor(doc.state.meta);
+    const sync = syncs[kind];
+    if (doc.state.meta.guide || !sync || !isConnected(kind)) {
+      folderNotice = doc.state.meta.guide
+        ? 'Images cannot be added to a style guide.'
+        : `Images are kept in the document’s folder. Choose a ${kind === 'private' ? 'private' : 'shared'} folder first (Library → Folders).`;
+      return false;
+    }
+    try {
+      // The document needs its folder on disk before anything can be put beside it.
+      await autosave.flush();
+      await folderWriter.flush();
+      const ref = await sync.saveAsset(doc.id, file.name, new Uint8Array(await file.arrayBuffer()));
+      if (!ref || current?.id !== doc.id) {
+        folderNotice = 'The image could not be saved: this document is not in the folder yet.';
+        return false;
+      }
+      const alt = file.name.replace(/\.[^.]+$/, '').replace(/[[\]]/g, '');
+      bridge?.insert(`![${alt}](${encodeURI(ref)})`);
+      return true;
+    } catch (e) {
+      folderNotice = `The image could not be saved: ${e instanceof Error ? e.message : String(e)}`;
+      return false;
+    }
+  }
+
+  /** A URL the page can show for an image the Markdown names as `assets/<name>`. */
+  async function assetUrl(ref: string): Promise<string | undefined> {
+    const doc = current;
+    if (!doc) return undefined;
+    const key = `${doc.id}:${ref}`;
+    if (assetUrls[key]) return assetUrls[key];
+    const sync = syncs[folderFor(doc.state.meta)];
+    try {
+      const bytes = await sync?.asset(doc.id, ref);
+      if (!bytes) return undefined;
+      const type =
+        IMAGE_TYPES[ref.split('.').pop()?.toLowerCase() ?? ''] ?? 'application/octet-stream';
+      return (assetUrls[key] ??= URL.createObjectURL(new Blob([bytes], { type })));
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Rendered HTML with every `assets/…` image pointed at a URL the page can load. */
+  async function withAssets(html: string): Promise<string> {
+    const refs = [...html.matchAll(/<img\b[^>]*?\ssrc="(assets\/[^"]+)"/g)].map((m) => m[1]!);
+    let out = html;
+    for (const ref of refs.filter((r, i) => refs.indexOf(r) === i)) {
+      const url = await assetUrl(ref);
+      if (url) out = out.replaceAll(`src="${ref}"`, `src="${url}"`);
+    }
+    return out;
+  }
+
   /* ---------- asking Claude Code from inside the Mac app ---------- */
 
   type ClaudeRun = {
@@ -1265,12 +1444,23 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
   let claudeRun = $state.raw<ClaudeRun | undefined>(undefined);
 
   /** Why Claude cannot be asked about the open document right now, or undefined if it can. */
-  async function claudeBlocked(use: 'edits' | 'chat' = 'edits'): Promise<string | undefined> {
+  async function claudeBlocked(
+    use: 'edits' | 'chat' | 'guide' = 'edits',
+  ): Promise<string | undefined> {
     const bridge = appBridge();
     if (!bridge) return 'Asking Claude from inside the app needs the Mac app.';
     if (!current) return 'Open a document first.';
-    if (current.state.meta.guide)
+    const guide = current.state.meta.guide;
+    if (use === 'guide') {
+      if (!guide)
+        return 'Open a genre guide first: principles are drafted for one genre at a time.';
+      if (guide.role === 'base')
+        return 'Principles are drafted from samples one genre at a time. Open a genre guide (Library → Style guides).';
+      if (suggestionOffer?.docId === current.id)
+        return 'Claude’s earlier suggestions for this guide are still waiting. Show or discard them first.';
+    } else if (guide) {
       return 'Style guides are yours to edit; Claude does not propose changes to them.';
+    }
     if (!claudeAllowed(current.state.meta))
       return 'Claude is switched off for this document. Switch it on from the toolbar to ask.';
     const sync = syncs.shared;
@@ -1319,6 +1509,53 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     let outcome: { kind: string; text: string };
     try {
       outcome = await bridge.claude.ask((sync.dir as NativeDir).nativePath, file, note, model);
+    } catch (e) {
+      outcome = { kind: 'error', text: e instanceof Error ? e.message : String(e) };
+    } finally {
+      stop();
+    }
+    if (claudeRun?.docId === doc.id)
+      claudeRun = {
+        ...claudeRun,
+        status: outcome.kind === 'error' ? 'error' : 'done',
+        summary: outcome.text,
+      };
+    void poll();
+  }
+
+  /**
+   * Has the user's own Claude Code read the samples for the open genre guide and suggest
+   * principles for it (the draft-principles skill). With `all`, samples read before are read
+   * again. The suggestions arrive through the folder poll.
+   */
+  async function draftPrinciples(all: boolean, model?: string): Promise<void> {
+    const bridge = appBridge();
+    const doc = current;
+    if (!bridge || !doc || (await claudeBlocked('guide'))) return;
+    const sync = syncs.shared!;
+    await autosave.flush();
+    await folderWriter.flush();
+    const file = await sync.fileName(doc.id);
+    const title = displayTitle(doc.state.meta.title, viewText(doc.state, 'clean'));
+    if (!file) {
+      claudeRun = {
+        docId: doc.id,
+        title,
+        status: 'error',
+        steps: [],
+        summary: 'This guide has not been written to the shared folder yet. Try again in a moment.',
+      };
+      return;
+    }
+    claudeRun = { docId: doc.id, title, status: 'running', steps: [], summary: '' };
+    const stop = bridge.claude.onEvent((e) => {
+      const run = claudeRun;
+      if (run?.docId === doc.id && run.status === 'running' && e.kind === 'step')
+        claudeRun = { ...run, steps: [...run.steps, e.text] };
+    });
+    let outcome: ClaudeEvent;
+    try {
+      outcome = await bridge.claude.draft((sync.dir as NativeDir).nativePath, file, all, model);
     } catch (e) {
       outcome = { kind: 'error', text: e instanceof Error ? e.message : String(e) };
     } finally {
@@ -1997,6 +2234,8 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     get external() {
       return external;
     },
+    addImage,
+    assetUrl,
     get claudeRun() {
       return claudeRun;
     },
@@ -2015,6 +2254,12 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       void saveChat(current, chatDivider(nowIso()));
       setChat(current.id, () => NO_CHAT);
     },
+    draftPrinciples,
+    get suggestionOffer() {
+      return suggestionOffer;
+    },
+    applySuggestions,
+    discardSuggestions,
     get revisionOffer() {
       return revisionOffer;
     },

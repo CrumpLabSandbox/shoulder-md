@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { menuTemplate } from './menu.mjs';
-import { askClaude, cancelClaude, chatClaude, claudeStatus } from './claude.mjs';
+import { askClaude, cancelClaude, chatClaude, claudeStatus, draftGuide } from './claude.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(here, '..', 'dist');
@@ -95,13 +95,24 @@ function registerFolderHandlers() {
 
   ipcMain.handle('fs:read', async (_e, dir, name) => fs.readFile(inside(dir, name), 'utf8'));
 
-  ipcMain.handle('fs:write', async (_e, dir, name, content) => {
+  // Write beside the file and swap it in, so a reader never sees half a file.
+  const writeWhole = async (dir, name, data) => {
     const file = inside(dir, name);
-    // Write beside the file and swap it in, so a reader never sees half a file.
     const tmp = path.join(dir, `.${name}.${process.pid}.tmp`);
-    await fs.writeFile(tmp, content, 'utf8');
+    await fs.writeFile(tmp, data);
     await fs.rename(tmp, file);
     return statOf(await fs.stat(file));
+  };
+  ipcMain.handle('fs:write', (_e, dir, name, content) => writeWhole(dir, name, String(content)));
+  // Images: bytes in and out. An upper limit keeps one paste from filling the disk.
+  ipcMain.handle('fs:writeBytes', (_e, dir, name, data) => {
+    if (!(data instanceof Uint8Array) || data.byteLength > 50 * 1024 * 1024)
+      throw new Error('That file is too large to add (the limit is 50 MB).');
+    return writeWhole(dir, name, data);
+  });
+  ipcMain.handle('fs:readBytes', async (_e, dir, name) => {
+    const buf = await fs.readFile(inside(dir, name));
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
   });
 
   ipcMain.handle('fs:mkdir', async (_e, dir, name) => {
@@ -125,8 +136,8 @@ function registerFolderHandlers() {
 
 /* ---------- Claude Code ---------- */
 
-/** The propose-edits skill shipped with the app; copied into the folder for each run. */
-const SKILL = path.join(here, '..', '.claude', 'skills', 'propose-edits');
+/** The skills shipped with the app; copied into the folder for each run. */
+const SKILLS = path.join(here, '..', '.claude', 'skills');
 
 function registerClaudeHandlers() {
   ipcMain.handle('claude:status', () => claudeStatus());
@@ -140,7 +151,7 @@ function registerClaudeHandlers() {
   ipcMain.handle('claude:ask', async (event, folder, docFile, note, model) => {
     checkDoc(folder, docFile);
     const onEvent = forward(event.sender);
-    return askClaude({ folder, docFile, note, model, skillSource: SKILL, onEvent });
+    return askClaude({ folder, docFile, note, model, skillsSource: SKILLS, onEvent });
   });
   ipcMain.handle('claude:chat', async (event, folder, docFile, message, sessionId, model) => {
     checkDoc(folder, docFile);
@@ -151,9 +162,14 @@ function registerClaudeHandlers() {
       message: String(message),
       sessionId,
       model,
-      skillSource: SKILL,
+      skillsSource: SKILLS,
       onEvent,
     });
+  });
+  ipcMain.handle('claude:draft', async (event, folder, guideFile, all, model) => {
+    checkDoc(folder, guideFile);
+    const onEvent = forward(event.sender);
+    return draftGuide({ folder, guideFile, all: !!all, model, skillsSource: SKILLS, onEvent });
   });
   ipcMain.handle('claude:cancel', () => cancelClaude());
 }

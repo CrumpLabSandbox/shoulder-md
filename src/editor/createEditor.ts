@@ -45,6 +45,8 @@ export type EditorBridge = {
   setText(text: string, opts?: { readOnly?: boolean }): void;
   getText(): string;
   getSelection(): Selection;
+  /** Types `text` at the cursor (replacing the selection) as the user would. */
+  insert(text: string): void;
   setSelection(sel: Selection, scroll?: boolean): void;
   /** Top of the line containing `pos`, relative to the visible editor viewport; undefined if not rendered. */
   measureTop(pos: number): number | undefined;
@@ -162,6 +164,14 @@ export function createEditor(opts: EditorOptions): EditorBridge {
     getSelection() {
       const m = view.state.selection.main;
       return { anchor: m.anchor, head: m.head };
+    },
+    insert(text) {
+      // An ordinary user edit: tracking and the model see it like typing.
+      view.dispatch(view.state.replaceSelection(text), {
+        userEvent: 'input',
+        scrollIntoView: true,
+      });
+      view.focus();
     },
     setSelection(sel, scroll = true) {
       view.dispatch({

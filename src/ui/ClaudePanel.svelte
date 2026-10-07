@@ -17,6 +17,9 @@
   } = $props();
 
   let note = $state('');
+  let readAll = $state(false);
+  /** On a style guide the panel drafts principles from samples; on a document it suggests edits. */
+  const onGuide = $derived(!!ws.currentGuide);
   let blocked = $state<string | undefined>(undefined);
   let checked = $state(false);
   const run = $derived(ws.claudeRun);
@@ -27,7 +30,7 @@
   // Find out whether asking is possible before offering the form.
   $effect(() => {
     if (run) return;
-    void ws.claudeBlocked().then((why) => {
+    void ws.claudeBlocked(onGuide ? 'guide' : 'edits').then((why) => {
       blocked = why;
       checked = true;
     });
@@ -61,7 +64,11 @@
       </div>
     {:else if run.status === 'done'}
       <p class="summary">{run.summary || 'Finished.'}</p>
-      <p class="state">Any proposed edits appear in a banner above; review them there.</p>
+      <p class="state">
+        {onGuide
+          ? 'Any suggested principles appear in a banner above; review them there.'
+          : 'Any proposed edits appear in a banner above; review them there.'}
+      </p>
       <div class="buttons"><button class="primary" onclick={close}>Close</button></div>
     {:else}
       <p class="summary warn">{run.summary}</p>
@@ -72,6 +79,16 @@
   {:else if blocked}
     <p class="summary">{blocked}</p>
     <div class="buttons"><button onclick={close}>Close</button></div>
+  {:else if onGuide}
+    <p class="state">
+      Claude Code will read your samples for “{ws.title}” in <code>Style/Samples</code> and suggest principles.
+      Each arrives as a tracked change in this guide for you to accept or reject. Reading a full folder
+      of samples can take several minutes and uses your Claude Code plan.
+    </p>
+    <label class="model">
+      <input type="checkbox" bind:checked={readAll} />
+      Read every sample again, not only new ones
+    </label>
   {:else}
     <p class="state">
       Claude Code will read this document and {guides}, then suggest edits. They arrive as tracked
@@ -82,6 +99,8 @@
       placeholder="Anything to focus on? (optional)"
       bind:value={note}
       aria-label="Instructions for Claude"></textarea>
+  {/if}
+  {#if !run && checked && !blocked}
     <label class="model">
       Model
       <select
@@ -95,7 +114,14 @@
       </select>
     </label>
     <div class="buttons">
-      <button class="primary" onclick={() => void ws.askClaude(note, model)}>Suggest edits</button>
+      {#if onGuide}
+        <button class="primary" onclick={() => void ws.draftPrinciples(readAll, model)}
+          >Draft principles</button
+        >
+      {:else}
+        <button class="primary" onclick={() => void ws.askClaude(note, model)}>Suggest edits</button
+        >
+      {/if}
       <button onclick={close}>Cancel</button>
     </div>
   {/if}
@@ -103,12 +129,13 @@
 
 <style>
   .claude {
+    /* Under the toolbar, clear of the banners above the status bar that it leads to. */
     position: fixed;
     right: 16px;
-    bottom: 44px;
+    top: 56px;
     z-index: 20;
     width: 340px;
-    max-height: 60vh;
+    max-height: 55vh;
     overflow: auto;
     display: flex;
     flex-direction: column;

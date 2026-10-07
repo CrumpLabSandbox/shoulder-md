@@ -18,13 +18,24 @@ export function nativeDir(path: string, name: string, fs: NativeFs): NativeDir {
     async getFile() {
       const stat = await fs.stat(path, fname);
       if (!stat) throw notFound(fname);
-      return { ...stat, text: () => fs.read(path, fname) };
+      return {
+        ...stat,
+        text: () => fs.read(path, fname),
+        arrayBuffer: async () => (await fs.readBytes(path, fname)).slice().buffer,
+      };
     },
     async createWritable() {
-      let buffer = '';
+      let text = '';
+      let bytes: Uint8Array<ArrayBuffer> | undefined;
       return {
-        write: async (data: string) => void (buffer += data),
-        close: async () => void (await fs.write(path, fname, buffer)),
+        write: async (data) => {
+          if (typeof data === 'string') text += data;
+          else bytes = data;
+        },
+        close: async () =>
+          void (bytes
+            ? await fs.writeBytes(path, fname, bytes)
+            : await fs.write(path, fname, text)),
       };
     },
   });

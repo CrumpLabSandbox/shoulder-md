@@ -319,6 +319,61 @@ describe('FolderSync', () => {
     expect(fs.folders()).not.toContain('Documents/untitled');
   });
 
+  it('keeps images in the document folder, and they follow a rename and a removal', async () => {
+    const fs = memoryDir();
+    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed);
+    const bytes = (s: string) => new TextEncoder().encode(s);
+    const empty = doc('');
+    // No folder yet: nowhere to put an image.
+    expect(await sync.saveAsset('d1', 'fig.png', bytes('A'))).toBeUndefined();
+    await sync.write(empty);
+    expect(await sync.saveAsset('d1', 'My Figure (1).PNG', bytes('A'))).toBe(
+      'assets/My-Figure-1.PNG',
+    );
+    // The same bytes again reuse the file; different bytes under the same name get a new one.
+    expect(await sync.saveAsset('d1', 'My Figure (1).PNG', bytes('A'))).toBe(
+      'assets/My-Figure-1.PNG',
+    );
+    expect(await sync.saveAsset('d1', 'My Figure (1).PNG', bytes('B'))).toBe(
+      'assets/My-Figure-1-2.PNG',
+    );
+    expect(await sync.saveAsset('d1', '../../etc/passwd', bytes('C'))).toBe('assets/etcpasswd');
+    expect(fs.names().filter((n) => n.includes('/assets/'))).toEqual([
+      'Documents/untitled/assets/My-Figure-1-2.PNG',
+      'Documents/untitled/assets/My-Figure-1.PNG',
+      'Documents/untitled/assets/etcpasswd',
+    ]);
+    expect(new TextDecoder().decode((await sync.asset('d1', 'assets/My-Figure-1-2.PNG'))!)).toBe(
+      'B',
+    );
+    // Only names inside the assets folder can be read this way.
+    expect(await sync.asset('d1', 'assets/../untitled.md')).toBeUndefined();
+    expect(await sync.asset('d1', 'untitled.md')).toBeUndefined();
+    expect(await sync.asset('d1', 'assets/nope.png')).toBeUndefined();
+    // They are not documents, and do not count as an outside change.
+    expect(await sync.check(empty)).toEqual({ kind: 'none' });
+
+    const titled = appendOp(empty, {
+      id: 'm',
+      type: 'set_meta',
+      author: 'me',
+      ts: 't',
+      patch: { title: 'Project plan' },
+    }).doc;
+    await sync.write(titled);
+    expect(fs.folders()).not.toContain('Documents/untitled');
+    expect(fs.names().filter((n) => n.includes('/assets/'))).toEqual([
+      'Documents/project-plan/assets/My-Figure-1-2.PNG',
+      'Documents/project-plan/assets/My-Figure-1.PNG',
+      'Documents/project-plan/assets/etcpasswd',
+    ]);
+    expect((await sync.assets('d1')).map((a) => a.name)).toHaveLength(3);
+
+    await sync.remove('d1');
+    expect(fs.names()).toEqual([]);
+    expect(fs.folders()).toEqual(['Documents']);
+  });
+
   it('rewrites missing files', async () => {
     const fs = memoryDir();
     const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed, FLAT);

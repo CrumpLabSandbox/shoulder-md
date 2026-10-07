@@ -3,6 +3,7 @@ export const MENU_COMMANDS = [
   'settings',
   'new',
   'import',
+  'insert-image',
   'documents',
   'library',
   'save',
@@ -33,6 +34,7 @@ export const MENU_COMMANDS = [
   'reject-all',
   'ask-claude',
   'chat',
+  'draft-principles',
   'reason',
   'comment',
 ] as const;
