@@ -37,7 +37,8 @@ export function menuTemplate(send, appName) {
         item('Library', 'library', 'Alt+Cmd+L'),
         sep,
         item('Save Now', 'save', 'Cmd+S'),
-        item('Choose Sync Folder…', 'folder'),
+        item('Choose Shared Folder…', 'folder'),
+        item('Choose Private Folder…', 'folder-private'),
         sep,
         {
           label: 'Export',
@@ -98,6 +99,8 @@ export function menuTemplate(send, appName) {
         sep,
         item('Accept All Changes', 'accept-all'),
         item('Reject All Changes', 'reject-all'),
+        sep,
+        item('Ask Claude to Suggest Edits…', 'ask-claude', 'Alt+Cmd+K'),
         sep,
         item('Add a Reason', 'reason', 'Alt+Cmd+E'),
         item('Comment on Selection', 'comment', 'Alt+Cmd+C'),

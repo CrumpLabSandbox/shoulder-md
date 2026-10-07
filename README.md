@@ -18,7 +18,7 @@ Phases 0 to 7 of the plan: a Markdown writing app with Word-style tracked change
 - Folder sync (Chrome and Edge): "Save to a folder…" in the status bar mirrors every document into a folder, such as a git repo, as `.md` and `.shoulder.json`, about a second after each save. Edits made to those files by other tools come back as tracked changes you can accept or reject; if both sides changed, your version wins and the disk version is kept as a `.conflict-` file.
 
 - Style guides: a base guide plus genre guides (Library → Style guides), where each top-level list item is a principle with a stable id like `[B4]`; "Give them ids" numbers new ones. "Import guides from a folder…" loads `base.md` and one `guide.md` per genre folder, creating guides or adding the principles an existing guide lacks. Each document picks a genre, and a change card's § button links the change to the principles behind it.
-- The Claude switch (toolbar): each document allows Claude or not, by default from its genre (genres can be private). Documents that allow Claude sync to the shared folder, where Claude Code works; the rest sync only to a separate private folder (Settings → Folder). Changing access moves the files, after asking.
+- The Claude switch (toolbar): each document allows Claude or not, by default from its genre (genres can be private). Documents that allow Claude sync to the shared folder, where Claude Code works; the rest sync only to a separate private folder (Library → Folders). Changing access moves the files, after asking.
 
 - Claude as an editor: in Claude Code, ask for edits to a document in the shared folder (the `propose-edits` skill). Claude writes a proposals file beside it; the app offers them as tracked changes by "Claude", each with a reason and the principle it applies, for you to accept or reject.
 
@@ -31,7 +31,16 @@ pnpm app          # build and run
 pnpm app:build    # package release/mac-arm64/Shoulder.app
 ```
 
-The Mac app keeps its documents in its own storage, separate from any browser. To bring existing work in, choose your synced folder with File → Choose Sync Folder…; the documents and guides in it are added. Use either the browser or the Mac app on a given folder, not both at once.
+### Asking Claude from inside the Mac app
+
+Changes → Ask Claude to Suggest Edits… (or the Claude button in the toolbar) has Claude Code read the open document and its style guides and propose edits, which arrive as tracked changes.
+
+- This runs **your own Claude Code**. The app starts the `claude` program already installed on your Mac, in your shared folder. It signs nobody in, stores no credentials, and has no API key; it uses whatever account your Claude Code is signed in with, and that account's usage.
+- If Claude Code is not installed and signed in (`claude` in a terminal), the feature is unavailable and the app says so. Everything else works without it.
+- Claude Code is allowed to read the folder, write `*.proposals.json` files, and run the skill's helper script. Nothing else is permitted while it runs unattended.
+- The app copies the `propose-edits` skill into `.claude/skills/` inside your shared folder.
+
+The Mac app keeps its documents in its own storage, separate from any browser. To bring existing work in, choose your synced folder with File → Choose Shared Folder…; the documents and guides in it are added. Use either the browser or the Mac app on a given folder, not both at once.
 
 Next: a principle inbox that Claude Code fills from your reasoned edits, run through Claude Code on the shared folder (no API key).
 

@@ -3,8 +3,6 @@
   import { PRESETS, type SettingsStore, type Theme } from '../settings/settings.svelte';
 
   import { AUTHOR_PALETTE } from '../docs/identity';
-  import type { FolderStatus } from '../docs/workspace.svelte';
-  import type { FolderKind } from '../persist/idb';
   import type { Author } from '../model/types';
 
   let {
@@ -12,24 +10,11 @@
     author,
     onauthor,
     onclose,
-    folder,
-    privateFolder,
-    privateUnsynced,
-    onconnectfolder,
-    onreconnectfolder,
-    ondisconnectfolder,
   }: {
     store: SettingsStore;
     author: Author;
     onauthor: (a: Author) => void;
     onclose: () => void;
-    folder: FolderStatus;
-    privateFolder: FolderStatus;
-    /** Documents with Claude off that no folder holds, because no private folder is set. */
-    privateUnsynced: number;
-    onconnectfolder: (kind: FolderKind) => void;
-    onreconnectfolder: (kind: FolderKind) => void;
-    ondisconnectfolder: (kind: FolderKind) => void;
   } = $props();
   const s = $derived(store.value);
 
@@ -41,30 +26,6 @@
     { id: 'sepia', label: 'Sepia' },
   ];
 </script>
-
-{#snippet controls(f: FolderStatus, kind: FolderKind)}
-  {#if f.status === 'connected'}
-    <p class="note">Syncing to <b>{f.name}</b>.</p>
-    <div class="row-buttons">
-      <button onclick={() => onconnectfolder(kind)}>Change folder…</button>
-      <button onclick={() => ondisconnectfolder(kind)}>Stop syncing</button>
-    </div>
-  {:else if f.status === 'needs-permission' || f.status === 'error'}
-    <p class="note">
-      “{f.name}” needs your permission again{f.status === 'error' ? ` (${f.error})` : ''}.
-    </p>
-    <div class="row-buttons">
-      <button onclick={() => onreconnectfolder(kind)}>Reconnect</button>
-      <button onclick={() => ondisconnectfolder(kind)}>Stop syncing</button>
-    </div>
-  {:else}
-    <div class="row-buttons">
-      <button onclick={() => onconnectfolder(kind)}
-        >{kind === 'private' ? 'Choose a private folder…' : 'Choose a folder…'}</button
-      >
-    </div>
-  {/if}
-{/snippet}
 
 <aside class="settings no-print" aria-label="Settings">
   <div class="head">
@@ -183,37 +144,6 @@
         >
       {/each}
     </div>
-  </section>
-
-  <section>
-    <h3>Folder</h3>
-    {#if folder.status === 'unsupported'}
-      <p class="note">
-        Saving to a folder needs Chrome or Edge. Documents are still saved in this browser.
-      </p>
-    {:else}
-      <p class="note">
-        Mirror every document Claude may read into a folder as <code>.md</code> and
-        <code>.shoulder.json</code>, for git or Claude Code. Edits made to those files elsewhere
-        come back as tracked changes.
-      </p>
-      {@render controls(folder, 'shared')}
-      <h4>Private folder</h4>
-      <p class="note">
-        Documents with Claude off go here instead, so Claude Code never sees them. Keep it outside
-        the shared folder.
-      </p>
-      {#if privateUnsynced > 0 && privateFolder.status !== 'connected'}
-        <p class="note warn">
-          {privateUnsynced}
-          {privateUnsynced === 1 ? 'document has' : 'documents have'} Claude off and {privateUnsynced ===
-          1
-            ? 'is'
-            : 'are'} saved only in this browser.
-        </p>
-      {/if}
-      {@render controls(privateFolder, 'private')}
-    {/if}
   </section>
 
   <section>
@@ -338,27 +268,6 @@
   }
   .sample {
     line-height: 1.4;
-  }
-  .note {
-    margin: 0;
-    font-size: 12px;
-    color: var(--fg-muted);
-    line-height: 1.45;
-  }
-  h4 {
-    margin: 6px 0 0;
-    font-size: 12px;
-    font-weight: 600;
-  }
-  .note.warn {
-    color: #b45309;
-  }
-  .row-buttons {
-    display: flex;
-    gap: 6px;
-  }
-  .row-buttons button {
-    border: 1px solid var(--border);
   }
   .swatches {
     display: flex;

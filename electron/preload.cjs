@@ -10,6 +10,16 @@ contextBridge.exposeInMainWorld('shoulderApp', {
     write: (dir, name, content) => ipcRenderer.invoke('fs:write', dir, name, content),
     remove: (dir, name) => ipcRenderer.invoke('fs:remove', dir, name),
   },
+  claude: {
+    status: () => ipcRenderer.invoke('claude:status'),
+    ask: (folder, docFile, note) => ipcRenderer.invoke('claude:ask', folder, docFile, note),
+    cancel: () => ipcRenderer.invoke('claude:cancel'),
+    onEvent: (handler) => {
+      const listener = (_event, e) => handler(e);
+      ipcRenderer.on('claude:event', listener);
+      return () => ipcRenderer.removeListener('claude:event', listener);
+    },
+  },
   onMenu: (handler) => {
     const listener = (_event, command) => handler(command);
     ipcRenderer.on('menu', listener);

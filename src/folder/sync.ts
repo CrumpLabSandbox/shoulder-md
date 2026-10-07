@@ -306,6 +306,12 @@ export class FolderSync {
     return removed;
   }
 
+  /** The name of a document's Markdown file here, once it has been written. */
+  async fileName(docId: string): Promise<string | undefined> {
+    const rec = await this.store.get(docId);
+    return rec && rec.opCount >= 0 ? rec.base + MD : undefined;
+  }
+
   /**
    * The proposals file waiting next to a document, if any. `key` changes when the file does,
    * so a caller can tell a file it has already looked at from a new one.

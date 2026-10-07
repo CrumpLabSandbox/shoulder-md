@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FolderPanel from './FolderPanel.svelte';
   import { onMount } from 'svelte';
   import type { Workspace } from '../docs/workspace.svelte';
   import type { LibraryEntry } from '../persist/idb';
@@ -241,6 +242,8 @@
       New documents join the library
     </label>
   </div>
+
+  <FolderPanel {ws} />
 
   <div class="panel guides" aria-label="Style guides">
     <div class="guides-head">

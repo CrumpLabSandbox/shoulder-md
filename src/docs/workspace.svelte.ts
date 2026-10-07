@@ -19,7 +19,7 @@ import {
 } from '../persist/idb';
 import { FolderSync, type External } from '../folder/sync';
 import { folderSupported, permissionOf, pickFolder, type DirHandleLike } from '../folder/fs';
-import { reviveHandle, sameNativeFolder, storableHandle } from '../folder/native';
+import { reviveHandle, sameNativeFolder, storableHandle, type NativeDir } from '../folder/native';
 import { appBridge } from '../app/bridge';
 import { cleanToRevision, editsToMatch, type OpBuilder } from '../folder/merge';
 import {
@@ -1133,6 +1133,85 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     }
   }
 
+  /* ---------- asking Claude Code from inside the Mac app ---------- */
+
+  type ClaudeRun = {
+    docId: string;
+    title: string;
+    status: 'running' | 'done' | 'error';
+    steps: string[];
+    summary: string;
+  };
+  let claudeRun = $state.raw<ClaudeRun | undefined>(undefined);
+
+  /** Why Claude cannot be asked about the open document right now, or undefined if it can. */
+  async function claudeBlocked(): Promise<string | undefined> {
+    const bridge = appBridge();
+    if (!bridge) return 'Asking Claude from inside the app needs the Mac app.';
+    if (!current) return 'Open a document first.';
+    if (current.state.meta.guide)
+      return 'Style guides are yours to edit; Claude does not propose changes to them.';
+    if (!claudeAllowed(current.state.meta))
+      return 'Claude is switched off for this document. Switch it on from the toolbar to ask.';
+    const sync = syncs.shared;
+    if (!sync || !isConnected('shared') || !('nativePath' in sync.dir))
+      return 'Choose a shared folder first (Library → Folders). Claude Code works on the copy there.';
+    if (proposalOffer?.docId === current.id)
+      return 'Claude’s earlier proposals for this document are still waiting. Show or discard them first.';
+    if (claudeRun?.status === 'running') return 'Claude is already working on a document.';
+    const status = await bridge.claude.status();
+    if (!status.available)
+      return 'Claude Code is not installed on this Mac. Install it, run “claude” once in Terminal to sign in, then try again. The app uses that sign-in and holds no credentials of its own.';
+    return undefined;
+  }
+
+  /**
+   * Has the user's own Claude Code read the open document and its guides and write proposals
+   * next to it (the propose-edits skill). The proposals then arrive through the folder poll.
+   */
+  async function askClaude(note?: string): Promise<void> {
+    const bridge = appBridge();
+    const doc = current;
+    if (!bridge || !doc || (await claudeBlocked())) return;
+    const sync = syncs.shared!;
+    await autosave.flush();
+    await folderWriter.flush();
+    const file = await sync.fileName(doc.id);
+    const title = displayTitle(doc.state.meta.title, viewText(doc.state, 'clean'));
+    if (!file) {
+      claudeRun = {
+        docId: doc.id,
+        title,
+        status: 'error',
+        steps: [],
+        summary:
+          'This document has not been written to the shared folder yet. Try again in a moment.',
+      };
+      return;
+    }
+    claudeRun = { docId: doc.id, title, status: 'running', steps: [], summary: '' };
+    const stop = bridge.claude.onEvent((e) => {
+      const run = claudeRun;
+      if (!run || run.docId !== doc.id) return;
+      if (e.kind === 'step') claudeRun = { ...run, steps: [...run.steps, e.text] };
+      else if (e.kind === 'done') claudeRun = { ...run, status: 'done', summary: e.text };
+      else if (e.kind === 'error') claudeRun = { ...run, status: 'error', summary: e.text };
+    });
+    try {
+      await bridge.claude.ask((sync.dir as NativeDir).nativePath, file, note);
+    } catch (e) {
+      claudeRun = {
+        ...claudeRun!,
+        status: 'error',
+        summary: e instanceof Error ? e.message : String(e),
+      };
+    } finally {
+      stop();
+      if (claudeRun?.status === 'running') claudeRun = { ...claudeRun, status: 'done' };
+    }
+    void poll();
+  }
+
   /**
    * Settles an outside change. 'disk' takes it in: Markdown edits become tracked changes by
    * "Edited on disk", new ops from another tool are appended, and a different history replaces
@@ -1367,7 +1446,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       if (leaving.length) {
         const where = isConnected('private')
           ? ` and written to the private folder “${folderName('private')}”`
-          : '. Choose a private folder in Settings to keep a copy on disk';
+          : '. Choose a private folder in the Library to keep a copy on disk';
         parts.push(
           `Turn Claude off for ${listTitles(leaving)}? ${leaving.length === 1 ? 'Its files' : 'Their files'} will be deleted from the shared folder “${folderName('shared')}”${where}.`,
         );
@@ -1672,6 +1751,15 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     },
     get external() {
       return external;
+    },
+    get claudeRun() {
+      return claudeRun;
+    },
+    claudeBlocked,
+    askClaude,
+    cancelClaude: () => appBridge()?.claude.cancel(),
+    dismissClaude: () => {
+      if (claudeRun?.status !== 'running') claudeRun = undefined;
     },
     get proposalOffer() {
       return proposalOffer;

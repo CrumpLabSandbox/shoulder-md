@@ -17,6 +17,7 @@
   import StatusBar from './StatusBar.svelte';
   import Library from './Library.svelte';
   import AccessMenu from './AccessMenu.svelte';
+  import ClaudePanel from './ClaudePanel.svelte';
   import GuideBanner from './GuideBanner.svelte';
 
   const settings = createSettingsStore();
@@ -116,7 +117,8 @@
     documents: () => (docsOpen = !docsOpen),
     library: () => (libraryOpen = !libraryOpen),
     save: () => void ws.flush(),
-    folder: () => void ws.connectFolder(),
+    folder: () => void ws.connectFolder('shared'),
+    'folder-private': () => void ws.connectFolder('private'),
     'export:md-clean': () => void ws.exportAs('md-clean'),
     'export:md-original': () => void ws.exportAs('md-original'),
     'export:md-critic': () => void ws.exportAs('md-critic'),
@@ -141,6 +143,7 @@
     previous: () => ws.prevChange(),
     'accept-all': () => ws.acceptAll(),
     'reject-all': () => ws.rejectAll(),
+    'ask-claude': () => (claudeOpen = true),
     reason: () => focusReason(),
     comment: () => {
       marginOpen = true;
@@ -148,6 +151,8 @@
     },
   };
   let importInput: HTMLInputElement | undefined = $state();
+  let claudeOpen = $state(false);
+  const inApp = !!appBridge();
 
   function focusReason() {
     const id = ws.activeChangeId;
@@ -223,7 +228,7 @@
   >
     {#snippet access()}
       {#if ws.ready && ws.current}
-        <AccessMenu {ws} />
+        <AccessMenu {ws} onaskclaude={inApp ? () => (claudeOpen = true) : undefined} />
       {/if}
     {/snippet}
   </Toolbar>
@@ -292,15 +297,13 @@
         author={ws.author}
         onauthor={setAuthor}
         onclose={() => (settingsOpen = false)}
-        folder={ws.folder}
-        privateFolder={ws.privateFolder}
-        privateUnsynced={ws.privateUnsynced}
-        onconnectfolder={(kind) => void ws.connectFolder(kind)}
-        onreconnectfolder={(kind) => void ws.reconnectFolder(kind)}
-        ondisconnectfolder={(kind) => void ws.disconnectFolder(kind)}
       />
     {/if}
   </div>
+
+  {#if claudeOpen || ws.claudeRun}
+    <ClaudePanel {ws} onclose={() => (claudeOpen = false)} />
+  {/if}
 
   {#if ws.external}
     {@const ext = ws.external.ext}

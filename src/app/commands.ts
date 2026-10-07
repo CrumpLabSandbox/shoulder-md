@@ -7,6 +7,7 @@ export const MENU_COMMANDS = [
   'library',
   'save',
   'folder',
+  'folder-private',
   'export:md-clean',
   'export:md-original',
   'export:md-critic',
@@ -30,6 +31,7 @@ export const MENU_COMMANDS = [
   'previous',
   'accept-all',
   'reject-all',
+  'ask-claude',
   'reason',
   'comment',
 ] as const;

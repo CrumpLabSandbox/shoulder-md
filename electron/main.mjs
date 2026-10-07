@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { menuTemplate } from './menu.mjs';
+import { askClaude, cancelClaude, claudeStatus } from './claude.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(here, '..', 'dist');
@@ -108,6 +109,27 @@ function registerFolderHandlers() {
   });
 }
 
+/* ---------- Claude Code ---------- */
+
+/** The propose-edits skill shipped with the app; copied into the folder for each run. */
+const SKILL = path.join(here, '..', '.claude', 'skills', 'propose-edits');
+
+function registerClaudeHandlers() {
+  ipcMain.handle('claude:status', () => claudeStatus());
+  ipcMain.handle('claude:ask', async (event, folder, docFile, note) => {
+    inside(folder, docFile); // only a document directly inside a folder the user picked
+    const page = event.sender;
+    await askClaude({
+      folder,
+      docFile,
+      note,
+      skillSource: SKILL,
+      onEvent: (e) => !page.isDestroyed() && page.send('claude:event', e),
+    });
+  });
+  ipcMain.handle('claude:cancel', () => cancelClaude());
+}
+
 /* ---------- window ---------- */
 
 const isOurs = (url) => url.startsWith(APP_URL) || (!!DEV_URL && url.startsWith(DEV_URL));
@@ -157,6 +179,7 @@ app.whenReady().then(async () => {
   });
   await loadGrants();
   registerFolderHandlers();
+  registerClaudeHandlers();
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate(send, app.name)));
   createWindow();
   app.on('activate', () => {

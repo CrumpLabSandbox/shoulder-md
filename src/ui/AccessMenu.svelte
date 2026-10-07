@@ -1,7 +1,14 @@
 <script lang="ts">
   import type { Workspace } from '../docs/workspace.svelte';
 
-  let { ws }: { ws: Workspace } = $props();
+  let {
+    ws,
+    onaskclaude,
+  }: {
+    ws: Workspace;
+    /** Opens the Ask Claude panel; only given in the Mac app. */
+    onaskclaude?: () => void;
+  } = $props();
 
   let open = $state(false);
   let root: HTMLDivElement | undefined = $state();
@@ -25,7 +32,7 @@
     const p = ws.privateFolder;
     return p.status === 'connected'
       ? `Files are written only to the private folder “${p.name}”.`
-      : 'Files stay in the browser. Choose a private folder in Settings to keep a copy on disk.';
+      : 'Files stay inside the app. Choose a private folder in the Library to keep a copy on disk.';
   });
 
   const ask = (message: string) => window.confirm(message);
@@ -95,6 +102,14 @@
       </div>
       <p class="hint">{destination}</p>
       <div class="links">
+        {#if onaskclaude && ws.claudeOn && !isGuide}
+          <button
+            onclick={() => {
+              open = false;
+              onaskclaude();
+            }}>Ask Claude to suggest edits…</button
+          >
+        {/if}
         <button
           onclick={() => {
             open = false;
