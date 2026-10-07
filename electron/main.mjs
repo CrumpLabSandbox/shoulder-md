@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { menuTemplate } from './menu.mjs';
-import { askClaude, cancelClaude, claudeStatus } from './claude.mjs';
+import { askClaude, cancelClaude, chatClaude, claudeStatus } from './claude.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(here, '..', 'dist');
@@ -42,9 +42,15 @@ async function grant(dir) {
   await fs.writeFile(grantsFile(), JSON.stringify(granted, null, 2));
 }
 
-/** The full path of a file directly inside a picked folder; anything else is refused. */
+/** Whether `dir` is a folder the user picked, or a folder somewhere inside one. */
+function allowed(dir) {
+  if (typeof dir !== 'string' || path.resolve(dir) !== dir) return false;
+  return granted.some((g) => dir === g || dir.startsWith(g + path.sep));
+}
+
+/** The full path of an entry directly inside an allowed folder; anything else is refused. */
 function inside(dir, name) {
-  if (!granted.includes(dir)) throw new Error('That folder has not been opened in the app.');
+  if (!allowed(dir)) throw new Error('That folder has not been opened in the app.');
   if (typeof name !== 'string' || !name || name !== path.basename(name) || name === '..')
     throw new Error('Not a file name.');
   return path.join(dir, name);
@@ -70,7 +76,7 @@ function registerFolderHandlers() {
   });
 
   ipcMain.handle('fs:list', async (_e, dir) => {
-    if (!granted.includes(dir)) throw new Error('That folder has not been opened in the app.');
+    if (!allowed(dir)) throw new Error('That folder has not been opened in the app.');
     const entries = await fs.readdir(dir, { withFileTypes: true });
     return entries
       .filter((d) => d.isFile() || d.isDirectory())
@@ -98,9 +104,17 @@ function registerFolderHandlers() {
     return statOf(await fs.stat(file));
   });
 
+  ipcMain.handle('fs:mkdir', async (_e, dir, name) => {
+    await fs.mkdir(inside(dir, name), { recursive: true });
+  });
+
+  // Removes a file, or a folder only if it is empty (rmdir refuses otherwise).
   ipcMain.handle('fs:remove', async (_e, dir, name) => {
+    const target = inside(dir, name);
     try {
-      await fs.unlink(inside(dir, name));
+      const s = await fs.lstat(target);
+      if (s.isDirectory()) await fs.rmdir(target);
+      else await fs.unlink(target);
       return true;
     } catch (e) {
       if (missing(e)) return false;
@@ -116,15 +130,29 @@ const SKILL = path.join(here, '..', '.claude', 'skills', 'propose-edits');
 
 function registerClaudeHandlers() {
   ipcMain.handle('claude:status', () => claudeStatus());
-  ipcMain.handle('claude:ask', async (event, folder, docFile, note) => {
-    inside(folder, docFile); // only a document directly inside a folder the user picked
-    const page = event.sender;
-    await askClaude({
+  // Only a document inside a folder the user picked; `docFile` is its path within it.
+  const checkDoc = (folder, docFile) => {
+    const full = path.resolve(folder, String(docFile));
+    if (!granted.includes(folder) || !full.startsWith(folder + path.sep) || !full.endsWith('.md'))
+      throw new Error('That document is not in a folder opened in the app.');
+  };
+  const forward = (page) => (e) => !page.isDestroyed() && page.send('claude:event', e);
+  ipcMain.handle('claude:ask', async (event, folder, docFile, note, model) => {
+    checkDoc(folder, docFile);
+    const onEvent = forward(event.sender);
+    return askClaude({ folder, docFile, note, model, skillSource: SKILL, onEvent });
+  });
+  ipcMain.handle('claude:chat', async (event, folder, docFile, message, sessionId, model) => {
+    checkDoc(folder, docFile);
+    const onEvent = forward(event.sender);
+    return chatClaude({
       folder,
       docFile,
-      note,
+      message: String(message),
+      sessionId,
+      model,
       skillSource: SKILL,
-      onEvent: (e) => !page.isDestroyed() && page.send('claude:event', e),
+      onEvent,
     });
   });
   ipcMain.handle('claude:cancel', () => cancelClaude());

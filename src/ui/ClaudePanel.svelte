@@ -1,8 +1,20 @@
 <script lang="ts">
   import type { Workspace } from '../docs/workspace.svelte';
+  import { CLAUDE_MODELS, type ClaudeModel } from '../app/bridge';
 
   /** Asks the user's own Claude Code to suggest edits to the open document (Mac app only). */
-  let { ws, onclose }: { ws: Workspace; onclose: () => void } = $props();
+  let {
+    ws,
+    model,
+    onmodel,
+    onclose,
+  }: {
+    ws: Workspace;
+    /** The model to request, remembered between runs. */
+    model: ClaudeModel;
+    onmodel: (m: ClaudeModel) => void;
+    onclose: () => void;
+  } = $props();
 
   let note = $state('');
   let blocked = $state<string | undefined>(undefined);
@@ -70,8 +82,20 @@
       placeholder="Anything to focus on? (optional)"
       bind:value={note}
       aria-label="Instructions for Claude"></textarea>
+    <label class="model">
+      Model
+      <select
+        value={model}
+        onchange={(e) => onmodel(e.currentTarget.value as ClaudeModel)}
+        aria-label="Claude model"
+      >
+        {#each CLAUDE_MODELS as m (m.id)}
+          <option value={m.id}>{m.label}</option>
+        {/each}
+      </select>
+    </label>
     <div class="buttons">
-      <button class="primary" onclick={() => void ws.askClaude(note)}>Suggest edits</button>
+      <button class="primary" onclick={() => void ws.askClaude(note, model)}>Suggest edits</button>
       <button onclick={close}>Cancel</button>
     </div>
   {/if}
@@ -133,6 +157,13 @@
     resize: vertical;
     font: inherit;
     font-size: 12px;
+  }
+  .model {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--fg-muted);
   }
   .buttons {
     display: flex;

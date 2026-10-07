@@ -18,6 +18,7 @@
   import Library from './Library.svelte';
   import AccessMenu from './AccessMenu.svelte';
   import ClaudePanel from './ClaudePanel.svelte';
+  import ChatPanel from './ChatPanel.svelte';
   import GuideBanner from './GuideBanner.svelte';
 
   const settings = createSettingsStore();
@@ -144,6 +145,7 @@
     'accept-all': () => ws.acceptAll(),
     'reject-all': () => ws.rejectAll(),
     'ask-claude': () => (claudeOpen = true),
+    chat: () => (chatOpen = !chatOpen),
     reason: () => focusReason(),
     comment: () => {
       marginOpen = true;
@@ -152,6 +154,7 @@
   };
   let importInput: HTMLInputElement | undefined = $state();
   let claudeOpen = $state(false);
+  let chatOpen = $state(false);
   const inApp = !!appBridge();
 
   function focusReason() {
@@ -228,7 +231,11 @@
   >
     {#snippet access()}
       {#if ws.ready && ws.current}
-        <AccessMenu {ws} onaskclaude={inApp ? () => (claudeOpen = true) : undefined} />
+        <AccessMenu
+          {ws}
+          onaskclaude={inApp ? () => (claudeOpen = true) : undefined}
+          onchat={inApp ? () => (chatOpen = true) : undefined}
+        />
       {/if}
     {/snippet}
   </Toolbar>
@@ -291,6 +298,15 @@
       />
     {/if}
 
+    {#if chatOpen && inApp && ws.ready && !libraryOpen}
+      <ChatPanel
+        {ws}
+        model={settings.value.claudeModel}
+        onmodel={(m) => settings.set('claudeModel', m)}
+        onclose={() => (chatOpen = false)}
+      />
+    {/if}
+
     {#if settingsOpen}
       <SettingsPanel
         store={settings}
@@ -302,7 +318,12 @@
   </div>
 
   {#if claudeOpen || ws.claudeRun}
-    <ClaudePanel {ws} onclose={() => (claudeOpen = false)} />
+    <ClaudePanel
+      {ws}
+      model={settings.value.claudeModel}
+      onmodel={(m) => settings.set('claudeModel', m)}
+      onclose={() => (claudeOpen = false)}
+    />
   {/if}
 
   {#if ws.external}
@@ -349,6 +370,22 @@
           >Show as tracked changes</button
         >
         <button onclick={() => void ws.discardProposals()}>Discard</button>
+      </span>
+    </div>
+  {/if}
+
+  {#if ws.revisionOffer && !ws.external}
+    <div class="notice external" role="alert">
+      <span>
+        Claude wrote a revised version of this document{ws.revisionOffer.reason
+          ? `: ${ws.revisionOffer.reason}`
+          : '.'}
+      </span>
+      <span class="actions">
+        <button class="primary" onclick={() => void ws.applyRevision()}
+          >Show as tracked changes</button
+        >
+        <button onclick={() => void ws.discardRevision()}>Discard</button>
       </span>
     </div>
   {/if}

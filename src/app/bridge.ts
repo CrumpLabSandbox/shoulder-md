@@ -10,17 +10,44 @@ export type NativeFs = {
   stat(dir: string, name: string): Promise<Stat | null>;
   read(dir: string, name: string): Promise<string>;
   write(dir: string, name: string, content: string): Promise<Stat>;
-  /** False when there was nothing to remove. */
+  mkdir(dir: string, name: string): Promise<void>;
+  /** Removes a file or an empty folder. False when there was nothing to remove. */
   remove(dir: string, name: string): Promise<boolean>;
 };
 
-export type ClaudeEvent = { kind: 'text' | 'step' | 'done' | 'error'; text: string };
+/** Models Claude Code can be asked to use; '' means its own default. */
+export const CLAUDE_MODELS = [
+  { id: '', label: 'Claude Code’s default' },
+  { id: 'fable', label: 'Fable' },
+  { id: 'opus', label: 'Opus' },
+  { id: 'sonnet', label: 'Sonnet' },
+  { id: 'haiku', label: 'Haiku' },
+] as const;
+export type ClaudeModel = (typeof CLAUDE_MODELS)[number]['id'];
+
+export type ClaudeEvent = {
+  kind: 'text' | 'step' | 'done' | 'error';
+  text: string;
+  /** On the final event of a run: the conversation to continue with. */
+  sessionId?: string;
+};
 
 /** The user's own Claude Code, started by the app. It may not be installed. */
 export type ClaudeBridge = {
   status(): Promise<{ available: boolean; version?: string }>;
-  /** Asks for proposals on one document; resolves when Claude Code has finished. */
-  ask(folder: string, docFile: string, note?: string): Promise<void>;
+  /**
+   * Asks for proposals on one document (its path inside `folder`). Progress arrives through
+   * `onEvent`; the promise resolves with the outcome, a 'done' or 'error' event.
+   */
+  ask(folder: string, docFile: string, note?: string, model?: string): Promise<ClaudeEvent>;
+  /** One turn of a conversation about a document; pass the last `sessionId` to continue it. */
+  chat(
+    folder: string,
+    docFile: string,
+    message: string,
+    sessionId?: string,
+    model?: string,
+  ): Promise<ClaudeEvent>;
   cancel(): Promise<void>;
   onEvent(handler: (event: ClaudeEvent) => void): () => void;
 };

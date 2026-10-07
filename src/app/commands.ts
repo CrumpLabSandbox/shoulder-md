@@ -32,6 +32,7 @@ export const MENU_COMMANDS = [
   'accept-all',
   'reject-all',
   'ask-claude',
+  'chat',
   'reason',
   'comment',
 ] as const;

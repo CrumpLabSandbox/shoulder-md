@@ -1,10 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import {
   ALLOWED_TOOLS,
+  CHAT_TOOLS,
+  CLAUDE_MODELS,
+  chatArgs,
+  chatSystemPrompt,
+  claudeArgs,
   eventsFromLine,
   proposalPrompt,
   takeLines,
 } from '../electron/claude-events.mjs';
+
+import { CLAUDE_MODELS as OFFERED } from '../src/app/bridge';
 
 const line = (o: unknown) => JSON.stringify(o);
 
@@ -69,9 +76,59 @@ describe('Claude Code output', () => {
     expect(proposalPrompt('a.md')).not.toContain('The author adds');
   });
 
+  it('passes a chosen model to Claude Code, and ignores anything not on the list', () => {
+    const plain = claudeArgs('a.md');
+    expect(plain.slice(0, 2)).toEqual(['-p', proposalPrompt('a.md')]);
+    expect(plain).not.toContain('--model');
+    expect(plain.slice(plain.indexOf('--allowedTools') + 1)).toEqual(ALLOWED_TOOLS);
+    const picked = claudeArgs('a.md', 'note', 'haiku');
+    expect(picked.slice(picked.indexOf('--model'), picked.indexOf('--model') + 2)).toEqual([
+      '--model',
+      'haiku',
+    ]);
+    expect(claudeArgs('a.md', '', '--dangerously-skip-permissions')).not.toContain('--model');
+    expect(CLAUDE_MODELS).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku']);
+    // The list the panel offers is the list the main process accepts.
+    expect(OFFERED.map((m) => m.id)).toEqual(CLAUDE_MODELS);
+  });
+
+  it('carries the session id on the final event', () => {
+    expect(
+      eventsFromLine(
+        line({ type: 'result', subtype: 'success', result: 'Hi', session_id: 'abc-123' }),
+      ),
+    ).toEqual([{ kind: 'done', text: 'Hi', sessionId: 'abc-123' }]);
+  });
+
+  it('builds a chat turn: resumes a session, names the document, widens writes by one file', () => {
+    const first = chatArgs('Documents/plan/plan.md', 'What is weak here?');
+    expect(first.slice(0, 2)).toEqual(['-p', 'What is weak here?']);
+    expect(first).not.toContain('--resume');
+    const system = first[first.indexOf('--append-system-prompt') + 1]!;
+    expect(system).toBe(chatSystemPrompt('Documents/plan/plan.md'));
+    expect(system).toContain('"Documents/plan/plan.revision.md"');
+    expect(system).toContain('"Documents/plan/plan.proposals.json"');
+    expect(system).toContain('Never edit the document');
+    expect(first.slice(first.indexOf('--allowedTools') + 1)).toEqual(CHAT_TOOLS);
+
+    const next = chatArgs('a.md', 'Shorter.', '0123abcd-ef01-2345-6789-abcdef012345', 'opus');
+    expect(next.slice(next.indexOf('--resume'), next.indexOf('--resume') + 2)).toEqual([
+      '--resume',
+      '0123abcd-ef01-2345-6789-abcdef012345',
+    ]);
+    expect(next).toContain('opus');
+    // Something that is not a session id is not passed on as one.
+    expect(chatArgs('a.md', 'x', '--dangerously-skip-permissions')).not.toContain('--resume');
+    // The only writes a chat adds are revision files.
+    expect(CHAT_TOOLS.filter((t) => !ALLOWED_TOOLS.includes(t))).toEqual([
+      'Write(/**/*.revision.md)',
+      'Edit(/**/*.revision.md)',
+    ]);
+  });
+
   it('lets Claude Code write only proposals files, and run only the skill helper', () => {
     const writes = ALLOWED_TOOLS.filter((t) => /^(Write|Edit)/.test(t));
-    expect(writes).toEqual(['Write(/*.proposals.json)', 'Edit(/*.proposals.json)']);
+    expect(writes).toEqual(['Write(/**/*.proposals.json)', 'Edit(/**/*.proposals.json)']);
     expect(ALLOWED_TOOLS.filter((t) => t.startsWith('Bash'))).toEqual([
       'Bash(node .claude/skills/propose-edits/shoulder.mjs:*)',
     ]);

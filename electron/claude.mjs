@@ -6,7 +6,7 @@ import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { ALLOWED_TOOLS, eventsFromLine, proposalPrompt, takeLines } from './claude-events.mjs';
+import { chatArgs, claudeArgs, eventsFromLine, takeLines } from './claude-events.mjs';
 
 const run = (file, args, opts = {}) =>
   new Promise((resolve) => {
@@ -66,36 +66,32 @@ async function installSkill(skillSource, folder) {
 let running;
 
 /**
- * Asks Claude Code for proposals on `docFile` in `folder`, reporting progress through
- * `onEvent`. Resolves when it finishes; the last event is always 'done' or 'error'.
+ * Runs Claude Code once in `folder` with the given arguments, reporting progress through
+ * `onEvent`. Resolves with the final event, which is always 'done' or 'error'. (The outcome is
+ * returned rather than sent as an event, because a reply and an event can arrive out of order.)
  */
-export async function askClaude({ folder, docFile, note, skillSource, onEvent }) {
-  if (running) return onEvent({ kind: 'error', text: 'Claude is already working on a document.' });
+async function runClaude({ folder, args, skillSource, onEvent }) {
+  if (running) return { kind: 'error', text: 'Claude is already working on a document.' };
   const bin = await findClaude();
-  if (!bin) return onEvent({ kind: 'error', text: 'Claude Code is not installed on this Mac.' });
+  if (!bin) return { kind: 'error', text: 'Claude Code is not installed on this Mac.' };
   await installSkill(skillSource, folder);
-  const args = [
-    '-p',
-    proposalPrompt(docFile, note),
-    '--output-format',
-    'stream-json',
-    '--verbose',
-    '--allowedTools',
-    ...ALLOWED_TOOLS,
-  ];
-  await new Promise((resolve) => {
+  return new Promise((resolve) => {
     let finished = false;
     const finish = (event) => {
       if (finished) return;
       finished = true;
       running = undefined;
-      onEvent(event);
-      resolve();
+      resolve(event);
     };
     let buffer = '';
     let stderr = '';
     loginPath().then((PATH) => {
-      const child = spawn(bin, args, { cwd: folder, env: { ...process.env, PATH } });
+      // No stdin: Claude Code otherwise waits a few seconds for piped input before starting.
+      const child = spawn(bin, args, {
+        cwd: folder,
+        env: { ...process.env, PATH },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
       running = child;
       child.stdout.on('data', (chunk) => {
         const { lines, rest } = takeLines(buffer + chunk);
@@ -124,6 +120,17 @@ export async function askClaude({ folder, docFile, note, skillSource, onEvent })
       });
     });
   });
+}
+
+/** Asks for per-edit proposals on one document (the propose-edits skill, one shot). */
+export function askClaude({ folder, docFile, note, model, skillSource, onEvent }) {
+  return runClaude({ folder, args: claudeArgs(docFile, note, model), skillSource, onEvent });
+}
+
+/** One turn of a conversation about a document; `sessionId` continues an earlier turn. */
+export function chatClaude({ folder, docFile, message, sessionId, model, skillSource, onEvent }) {
+  const args = chatArgs(docFile, message, sessionId, model);
+  return runClaude({ folder, args, skillSource, onEvent });
 }
 
 export function cancelClaude() {

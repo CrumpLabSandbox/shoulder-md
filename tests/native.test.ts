@@ -17,11 +17,16 @@ function fakeDisk() {
     lastModified: e.lastModified,
     size: new TextEncoder().encode(e.content).length,
   });
+  const dirs = new Set<string>();
   const fs: NativeFs = {
-    list: async (dir) =>
-      [...files.keys()]
-        .filter((k) => k.startsWith(dir + '/'))
+    list: async (dir) => [
+      ...[...dirs]
+        .filter((d) => d.startsWith(dir + '/') && !d.slice(dir.length + 1).includes('/'))
+        .map((d) => ({ name: d.slice(dir.length + 1), kind: 'directory' as const })),
+      ...[...files.keys()]
+        .filter((k) => k.startsWith(dir + '/') && !k.slice(dir.length + 1).includes('/'))
         .map((k) => ({ name: k.slice(dir.length + 1), kind: 'file' as const })),
+    ],
     stat: async (dir, name) => {
       const e = files.get(key(dir, name));
       return e ? stat(e) : null;
@@ -32,7 +37,8 @@ function fakeDisk() {
       files.set(key(dir, name), e);
       return stat(e);
     },
-    remove: async (dir, name) => files.delete(key(dir, name)),
+    mkdir: async (dir, name) => void dirs.add(key(dir, name)),
+    remove: async (dir, name) => files.delete(key(dir, name)) || dirs.delete(key(dir, name)),
   };
   return { fs, files };
 }
@@ -47,13 +53,20 @@ describe('native folders', () => {
     const sync = new FolderSync(dir, memoryFolderStore());
     const h = harness('# My Plan\n\nHello there.');
     expect((await sync.write(h.doc)).written).toBe(true);
-    expect((await listFileNames(dir)).sort()).toEqual(['my-plan.md', 'my-plan.shoulder.json']);
-    expect(disk.files.get('/Users/me/Docs/my-plan.md')!.content).toBe('# My Plan\n\nHello there.');
+    expect([...disk.files.keys()].sort()).toEqual([
+      '/Users/me/Docs/Documents/my-plan/my-plan.md',
+      '/Users/me/Docs/Documents/my-plan/my-plan.shoulder.json',
+    ]);
+    expect(await listFileNames(dir)).toEqual([]);
     expect(await sync.check(h.doc)).toEqual({ kind: 'none' });
     expect((await sync.write(h.doc)).written).toBe(false);
 
     // An edit made on disk by another program is noticed.
-    await disk.fs.write('/Users/me/Docs', 'my-plan.md', '# My Plan\n\nHello there, world.');
+    await disk.fs.write(
+      '/Users/me/Docs/Documents/my-plan',
+      'my-plan.md',
+      '# My Plan\n\nHello there, world.',
+    );
     expect(await sync.check(h.doc)).toMatchObject({ kind: 'md' });
   });
 

@@ -37,6 +37,14 @@ export function nativeDir(path: string, name: string, fs: NativeFs): NativeDir {
       if (!options?.create && !(await fs.stat(path, fname))) throw notFound(fname);
       return file(fname);
     },
+    async getDirectoryHandle(child, options) {
+      const there = (await fs.list(path)).some((e) => e.name === child && e.kind === 'directory');
+      if (!there) {
+        if (!options?.create) throw notFound(child);
+        await fs.mkdir(path, child);
+      }
+      return nativeDir(`${path}/${child}`, child, fs);
+    },
     async *values() {
       for (const entry of await fs.list(path)) {
         if (entry.kind === 'file') yield file(entry.name);

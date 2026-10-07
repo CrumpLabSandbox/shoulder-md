@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
-import { FolderSync, memoryFolderStore } from '../src/folder/sync';
-import { cleanToRevision, editsToMatch, textHunks } from '../src/folder/merge';
+import { FLAT, FolderSync, memoryFolderStore } from '../src/folder/sync';
+import { cleanToRevision, coarsen, editsToMatch, textHunks } from '../src/folder/merge';
 import { memoryDir } from './helpers/memfs';
 import { harness } from './helpers/model';
 import { createDocument, appendOp, applyOp } from '../src/model/apply';
@@ -9,6 +9,7 @@ import { exportJson } from '../src/export/json';
 import { sequentialIds } from '../src/model/ids';
 import { text as viewText, markedRanges } from '../src/model/views';
 import type { Document, Op } from '../src/model/types';
+import { pendingChanges } from '../src/model/changes';
 
 const fixed = () => new Date(2026, 9, 6, 9, 30, 0);
 
@@ -42,7 +43,7 @@ function withEdit(d: Document, insert: string): Document {
 describe('FolderSync', () => {
   it('writes .md and .shoulder.json named after the title, and skips unchanged documents', async () => {
     const fs = memoryDir();
-    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed);
+    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed, FLAT);
     const d = doc('# My Paper\n\nHello.');
     expect(await sync.write(d)).toEqual({ written: true, backups: [] });
     expect(fs.names()).toEqual(['my-paper.md', 'my-paper.shoulder.json']);
@@ -63,7 +64,7 @@ describe('FolderSync', () => {
 
   it('gives documents with the same title distinct names', async () => {
     const fs = memoryDir();
-    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed);
+    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed, FLAT);
     await sync.write(doc('# Notes', 'a'));
     await sync.write(doc('# Notes', 'b'));
     expect(fs.names()).toEqual([
@@ -76,7 +77,7 @@ describe('FolderSync', () => {
 
   it('reports a disk edit of the .md when the browser did not change, without writing', async () => {
     const fs = memoryDir();
-    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed);
+    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed, FLAT);
     const d = doc('Hello world.');
     await sync.write(d);
     fs.writeOutside('hello-world.md', 'Hello there world.');
@@ -91,7 +92,7 @@ describe('FolderSync', () => {
 
   it('when both changed, the browser wins and the disk version is kept as a conflict file', async () => {
     const fs = memoryDir();
-    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed);
+    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed, FLAT);
     let d = doc('Hello world.');
     await sync.write(d);
     fs.writeOutside('hello-world.md', 'Edited elsewhere.');
@@ -104,7 +105,7 @@ describe('FolderSync', () => {
 
   it('force overwrites a disk edit after backing it up', async () => {
     const fs = memoryDir();
-    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed);
+    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed, FLAT);
     const d = doc('Hello world.');
     await sync.write(d);
     fs.writeOutside('hello-world.md', 'Other.');
@@ -116,7 +117,7 @@ describe('FolderSync', () => {
 
   it('detects an op log on disk that extends ours, and one that diverges', async () => {
     const fs = memoryDir();
-    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed);
+    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed, FLAT);
     const d = doc('Hello world.');
     await sync.write(d);
     const longer = withEdit(d, 'More. ');
@@ -132,7 +133,7 @@ describe('FolderSync', () => {
 
   it('writes again when a typing run grew its op without adding one', async () => {
     const fs = memoryDir();
-    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed);
+    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed, FLAT);
     const d = doc('Hello world.', 'd1', 'Hello world');
     const short = withEdit(d, 'Mo');
     await sync.write(short);
@@ -148,7 +149,7 @@ describe('FolderSync', () => {
 
   it('renames files that were named while the document was untitled', async () => {
     const fs = memoryDir();
-    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed);
+    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed, FLAT);
     const meta = (d: Document, title: string): Document =>
       appendOp(d, {
         id: `m${d.ops.length}`,
@@ -163,35 +164,35 @@ describe('FolderSync', () => {
     fs.writeOutside('untitled.proposals.json', '{"proposals":[]}');
 
     // Still on its first line: the derived title is not settled, so the name stays.
-    const typing = withEdit(empty, 'Fellowship Le');
+    const typing = withEdit(empty, 'Project pl');
     expect((await sync.write(typing)).renamed).toBeUndefined();
     expect(fs.names()).toContain('untitled.md');
 
     // An explicit title settles it; the old files go and waiting proposals move along.
-    const titled = meta(typing, 'Sabbatical application');
+    const titled = meta(typing, 'Project plan');
     const r = await sync.write(titled);
-    expect(r.renamed).toEqual({ from: 'untitled.md', to: 'sabbatical-application.md' });
+    expect(r.renamed).toEqual({ from: 'untitled.md', to: 'project-plan.md' });
     expect(fs.names()).toEqual([
-      'sabbatical-application.md',
-      'sabbatical-application.proposals.json',
-      'sabbatical-application.shoulder.json',
+      'project-plan.md',
+      'project-plan.proposals.json',
+      'project-plan.shoulder.json',
     ]);
-    expect((await sync.proposals('d1'))?.file).toBe('sabbatical-application.proposals.json');
+    expect((await sync.proposals('d1'))?.file).toBe('project-plan.proposals.json');
     expect(await sync.check(titled)).toEqual({ kind: 'none' });
     expect((await sync.write(titled)).written).toBe(false);
     // A later title change does not rename again.
     await sync.write(meta(titled, 'Something else'));
-    expect(fs.names()).toContain('sabbatical-application.md');
+    expect(fs.names()).toContain('project-plan.md');
   });
 
   it('renames an untitled file once the text has moved past its first line, even if unchanged since', async () => {
     const fs = memoryDir();
     const store = memoryFolderStore();
-    const sync = new FolderSync(fs.dir, store, fixed);
-    const d = doc('# Leave proposal\n\nBody text.', 'd2');
+    const sync = new FolderSync(fs.dir, store, fixed, FLAT);
+    const d = doc('# Research notes\n\nBody text.', 'd2');
     // As if it had been written under a placeholder name earlier.
     await store.put({ docId: 'd2', base: 'untitled-2', opCount: -1 });
-    expect((await sync.write(d)).renamed?.to).toBe('leave-proposal.md');
+    expect((await sync.write(d)).renamed?.to).toBe('research-notes.md');
     // An outside edit under the old name is settled first, not renamed away.
     const other = doc('', 'd3');
     await sync.write(other);
@@ -202,9 +203,125 @@ describe('FolderSync', () => {
     expect(fs.names()).toContain('untitled.md');
   });
 
-  it('rewrites missing files', async () => {
+  it('gives each document its own folder and keeps guides together', async () => {
     const fs = memoryDir();
     const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed);
+    await sync.prepare();
+    expect(fs.folders()).toEqual(['Documents', 'Style', 'Style/Guides', 'Style/Samples']);
+    expect(fs.names()).toEqual(['Style/Samples/README.md']);
+
+    const d = doc('# My Paper\n\nHello.');
+    const guide = appendOp(doc('# Grants\n\n- [G1] Be clear.', 'g1'), {
+      id: 'm',
+      type: 'set_meta',
+      author: 'me',
+      ts: 't',
+      patch: { guide: { role: 'genre', prefix: 'G' } },
+    }).doc;
+    await sync.write(d);
+    await sync.write(guide);
+    expect(fs.names()).toEqual([
+      'Documents/my-paper/my-paper.md',
+      'Documents/my-paper/my-paper.shoulder.json',
+      'Style/Guides/grants.md',
+      'Style/Guides/grants.shoulder.json',
+      'Style/Samples/README.md',
+    ]);
+    expect(await sync.fileName('d1')).toBe('Documents/my-paper/my-paper.md');
+    expect((await sync.write(d)).written).toBe(false);
+
+    // Proposals, conflict copies and outside edits all live in the document's own folder.
+    fs.writeOutside('Documents/my-paper/my-paper.proposals.json', '{"proposals":[]}');
+    expect((await sync.proposals('d1'))?.file).toBe('my-paper.proposals.json');
+    fs.writeOutside('Documents/my-paper/my-paper.md', '# My Paper\n\nHello, edited.');
+    expect(await sync.check(d)).toMatchObject({ kind: 'md' });
+    const r = await sync.write(withEdit(d, 'Mine. '));
+    expect(r.backups).toEqual(['my-paper.conflict-20261006-093000.md']);
+    expect(fs.names()).toContain('Documents/my-paper/my-paper.conflict-20261006-093000.md');
+
+    // A second document with the same title gets its own folder.
+    await sync.write(doc('# My Paper\n\nAnother.', 'd2'));
+    expect(fs.names()).toContain('Documents/my-paper-2/my-paper-2.md');
+
+    // Removing a document removes its folder with it.
+    await sync.remove('d2');
+    expect(fs.folders()).not.toContain('Documents/my-paper-2');
+  });
+
+  it('finds documents wherever they are, and moves older flat files into place', async () => {
+    const fs = memoryDir();
+    // A folder written by the earlier flat layout, with waiting proposals and a conflict copy.
+    const old = new FolderSync(fs.dir, memoryFolderStore(), fixed, FLAT);
+    const paper = doc('# My Paper\n\nHello.');
+    const guide = appendOp(doc('# Grants\n\n- [G1] Be clear.', 'g1'), {
+      id: 'm',
+      type: 'set_meta',
+      author: 'me',
+      ts: 't',
+      patch: { guide: { role: 'genre', prefix: 'G' } },
+    }).doc;
+    await old.write(paper);
+    await old.write(guide);
+    fs.writeOutside('my-paper.proposals.json', '{"proposals":[]}');
+    fs.writeOutside('my-paper.conflict-20260101-000000.md', 'kept');
+
+    // A fresh app connects: it has neither document.
+    const store = memoryFolderStore();
+    const sync = new FolderSync(fs.dir, store, fixed);
+    await sync.prepare();
+    const found = await sync.scan([], []);
+    expect(found.map((d) => d.id).sort()).toEqual(['d1', 'g1']);
+    const moved = await sync.write(paper);
+    expect(moved.moved).toBe(true);
+    await sync.write(guide);
+    expect(fs.names()).toEqual([
+      'Documents/my-paper/my-paper.conflict-20260101-000000.md',
+      'Documents/my-paper/my-paper.md',
+      'Documents/my-paper/my-paper.proposals.json',
+      'Documents/my-paper/my-paper.shoulder.json',
+      'Style/Guides/grants.md',
+      'Style/Guides/grants.shoulder.json',
+      'Style/Samples/README.md',
+    ]);
+    expect(await sync.check(paper)).toEqual({ kind: 'none' });
+    expect((await sync.write(paper)).written).toBe(false);
+    // Scanning again finds them in their new places and nothing new.
+    expect(await new FolderSync(fs.dir, memoryFolderStore(), fixed).scan(['d1', 'g1'], [])).toEqual(
+      [],
+    );
+  });
+
+  it('moves flat files it already tracked, and renames an untitled folder with its files', async () => {
+    const fs = memoryDir();
+    const store = memoryFolderStore();
+    const d = doc('# My Paper\n\nHello.');
+    await new FolderSync(fs.dir, store, fixed, FLAT).write(d);
+    // The same store, now with the structured layout: unchanged documents still move.
+    const sync = new FolderSync(fs.dir, store, fixed);
+    expect(await sync.write(d)).toMatchObject({ written: true, moved: true });
+    expect(fs.names()).toEqual([
+      'Documents/my-paper/my-paper.md',
+      'Documents/my-paper/my-paper.shoulder.json',
+    ]);
+
+    const empty = doc('', 'd2');
+    await sync.write(empty);
+    expect(fs.names()).toContain('Documents/untitled/untitled.md');
+    const titled = appendOp(empty, {
+      id: 'm1',
+      type: 'set_meta',
+      author: 'me',
+      ts: 't',
+      patch: { title: 'Project plan' },
+    }).doc;
+    expect((await sync.write(titled)).renamed?.to).toBe('project-plan.md');
+    expect(fs.names()).toContain('Documents/project-plan/project-plan.md');
+    expect(fs.folders()).not.toContain('Documents/untitled');
+  });
+
+  it('rewrites missing files', async () => {
+    const fs = memoryDir();
+    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed, FLAT);
     const d = doc('Hello world.');
     await sync.write(d);
     fs.files.delete('hello-world.md');
@@ -215,7 +332,7 @@ describe('FolderSync', () => {
 
   it('scans for documents the browser does not have, skipping known and deleted ones', async () => {
     const other = memoryDir();
-    const writer = new FolderSync(other.dir, memoryFolderStore(), fixed);
+    const writer = new FolderSync(other.dir, memoryFolderStore(), fixed, FLAT);
     await writer.write(doc('# Shared', 'shared'));
     await writer.write(doc('# Known', 'known'));
     await writer.write(doc('# Gone', 'gone'));
@@ -225,7 +342,7 @@ describe('FolderSync', () => {
     );
     // A second browser connects to the same folder.
     const store = memoryFolderStore();
-    const sync = new FolderSync(other.dir, store, fixed);
+    const sync = new FolderSync(other.dir, store, fixed, FLAT);
     const found = await sync.scan(new Set(['known']), new Set(['gone']));
     expect(found.map((d) => d.id)).toEqual(['shared']);
     expect((await store.get('shared'))?.base).toBe('shared');
@@ -242,7 +359,7 @@ describe('FolderSync', () => {
   it('first write keeps a differing file already at that name', async () => {
     const fs = memoryDir();
     fs.writeOutside('notes.md', 'Somebody else’s notes.');
-    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed);
+    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed, FLAT);
     await sync.write(doc('# Notes', 'n'));
     // The existing notes.md is not ours, so we pick another name instead of overwriting it.
     expect(fs.read('notes.md')).toBe('Somebody else’s notes.');
@@ -251,6 +368,46 @@ describe('FolderSync', () => {
 });
 
 describe('text → tracked edits', () => {
+  it('joins nearby hunks into one change, but never across lines', () => {
+    const a =
+      'The project is going to be done in the summer. It is new.\n\nSecond paragraph stays.';
+    const b =
+      'The project will run over the summer, and it breaks new ground.\n\nSecond paragraph stays. Added.';
+    const fine = textHunks(a, b);
+    expect(fine.length).toBeGreaterThan(5);
+    const joined = coarsen(a, fine, 24);
+    // The sentence rewrite is one change; the sentence added to another paragraph is its own.
+    expect(joined).toHaveLength(2);
+    // A change that adds a paragraph is not folded into the sentence before it.
+    const appended = a + '\n\nNew paragraph.';
+    const withPara = coarsen(a, textHunks(a, b.replace(' Added.', '') + '\n\nNew paragraph.'), 24);
+    expect(withPara[withPara.length - 1]!.insert).toContain('New paragraph.');
+    expect(withPara[withPara.length - 1]!.insert).not.toContain('ground');
+    expect(appended.length).toBeGreaterThan(a.length);
+    expect(a.slice(joined[0]!.from, joined[0]!.to)).toBe(
+      'is going to be done in the summer. It is new',
+    );
+    expect(joined[0]!.insert).toBe('will run over the summer, and it breaks new ground');
+    // Applying the joined hunks still gives the target.
+    let out = a;
+    for (const h of [...joined].reverse()) out = out.slice(0, h.from) + h.insert + out.slice(h.to);
+    expect(out).toBe(b);
+    // With no joining distance nothing changes.
+    expect(coarsen(a, fine, 0)).toEqual(fine);
+
+    const h = harness(a);
+    for (const build of editsToMatch(h.state, b, {
+      author: 'claude',
+      ts: 't',
+      id: h.idGen,
+      joinWithin: 24,
+    }))
+      h.applyOps([build(h.state)!]);
+    expect(h.clean()).toBe(b);
+    expect(h.original()).toBe(a);
+    expect(pendingChanges(h.state)).toHaveLength(2);
+  });
+
   it('finds word-level hunks', () => {
     expect(textHunks('The results was significant.', 'The results were significant.')).toEqual([
       { from: 12, to: 15, insert: 'were' },
@@ -332,7 +489,7 @@ describe('moving between folders', () => {
   it("removes a document's files and forgets them", async () => {
     const fs = memoryDir();
     const store = memoryFolderStore();
-    const sync = new FolderSync(fs.dir, store, fixed);
+    const sync = new FolderSync(fs.dir, store, fixed, FLAT);
     const d = doc('# Secret\n\nText.');
     await sync.write(d);
     expect(await sync.has(d.id)).toBe(true);

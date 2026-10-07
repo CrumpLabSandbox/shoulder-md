@@ -1,3 +1,4 @@
+import { CLAUDE_MODELS, type ClaudeModel } from '../app/bridge';
 import { fontById } from './fonts';
 
 export type Theme = 'system' | 'light' | 'dark' | 'sepia';
@@ -18,6 +19,8 @@ export type Settings = {
   showReasonField: boolean;
   /** New documents join the edits library. Off by default: the library is opt-in. */
   libraryDefault: boolean;
+  /** Which model Ask Claude requests ('' leaves it to Claude Code). Mac app only. */
+  claudeModel: ClaudeModel;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -32,6 +35,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showReasonTags: false,
   showReasonField: true,
   libraryDefault: false,
+  claudeModel: '',
 };
 
 export type Preset = {
@@ -145,6 +149,7 @@ export function sanitize(s: Settings): Settings {
     showReasonTags: typeof s.showReasonTags === 'boolean' ? s.showReasonTags : false,
     showReasonField: typeof s.showReasonField === 'boolean' ? s.showReasonField : true,
     libraryDefault: typeof s.libraryDefault === 'boolean' ? s.libraryDefault : false,
+    claudeModel: CLAUDE_MODELS.some((m) => m.id === s.claudeModel) ? s.claudeModel : '',
   };
 }
 

@@ -47,10 +47,15 @@ export function eventsFromLine(line) {
   if (msg.type === 'result') {
     const failed = msg.is_error || (msg.subtype && msg.subtype !== 'success');
     const text = typeof msg.result === 'string' ? msg.result.trim() : '';
+    const session = typeof msg.session_id === 'string' ? { sessionId: msg.session_id } : {};
     return [
       failed
-        ? { kind: 'error', text: text || `Claude Code stopped early (${msg.subtype ?? 'error'}).` }
-        : { kind: 'done', text },
+        ? {
+            kind: 'error',
+            text: text || `Claude Code stopped early (${msg.subtype ?? 'error'}).`,
+            ...session,
+          }
+        : { kind: 'done', text, ...session },
     ];
   }
   return [];
@@ -83,7 +88,49 @@ export const ALLOWED_TOOLS = [
   'Read',
   'Glob',
   'Grep',
-  'Write(/*.proposals.json)',
-  'Edit(/*.proposals.json)',
+  'Write(/**/*.proposals.json)',
+  'Edit(/**/*.proposals.json)',
   'Bash(node .claude/skills/propose-edits/shoulder.mjs:*)',
 ];
+
+/** Model choices passed to Claude Code as `--model`; '' leaves it to Claude Code's own default. */
+export const CLAUDE_MODELS = ['', 'fable', 'opus', 'sonnet', 'haiku'];
+
+/** The command-line arguments for one request. An unknown model name is ignored. */
+export function claudeArgs(docFile, note, model) {
+  const args = ['-p', proposalPrompt(docFile, note), '--output-format', 'stream-json', '--verbose'];
+  if (model && CLAUDE_MODELS.includes(model)) args.push('--model', model);
+  args.push('--allowedTools', ...ALLOWED_TOOLS);
+  return args;
+}
+
+/* ---------- chat ---------- */
+
+/** In a chat, Claude Code may also write one revised copy of a document for the app to diff. */
+export const CHAT_TOOLS = [...ALLOWED_TOOLS, 'Write(/**/*.revision.md)', 'Edit(/**/*.revision.md)'];
+
+/** What Claude Code is told, on every turn, about where it is and what it may do. */
+export function chatSystemPrompt(docFile) {
+  const stem = docFile.replace(/\.md$/, '');
+  return [
+    `You are helping an author inside Shoulder, their writing app, in a chat panel beside the document "${docFile}" (a path in the current folder). Read that file whenever you need its current text; the author may have edited it since your last turn.`,
+    `The author's style guides are Markdown files in Style/Guides/, and examples of their past writing are in Style/Samples/. Run "node .claude/skills/propose-edits/shoulder.mjs context ${JSON.stringify(docFile)}" to find the guides that apply to this document, and follow them when you edit or advise.`,
+    'You can do three things:',
+    '1. Answer questions and give advice about the document. Just reply; write no files.',
+    `2. Suggest small, separately justified edits. Follow .claude/skills/propose-edits/SKILL.md, which has you write "${stem}.proposals.json". If the context command says a proposals file already exists, tell the author to deal with it first instead of replacing it.`,
+    `3. Make a larger revision (restructuring, rewriting sections, wholesale edits). Write the complete revised document to "${stem}.revision.md". Its first line must be an HTML comment giving the reason in one or two plain sentences, like "<!-- reason: Reorganised the plan around the three aims. -->", followed by the full text of the document as it should read, including the parts you did not change.`,
+    "Never edit the document's own .md or .shoulder.json, and write nothing else. The app turns your proposals or revision into tracked changes that the author accepts or rejects, so say that this is what will happen; do not paste the full rewrite into the chat.",
+    'Choose 2 for local wording and correctness, 3 when the author asks for bigger changes, and 1 when they ask a question. You are running unattended: do not ask for permission to use tools.',
+    'Replies appear in a narrow panel. Keep them short and plain: a few sentences or a short list, no headings or tables.',
+  ].join('\n\n');
+}
+
+/** The command-line arguments for one chat turn; `sessionId` continues an earlier turn. */
+export function chatArgs(docFile, message, sessionId, model) {
+  const args = ['-p', message, '--output-format', 'stream-json', '--verbose'];
+  if (sessionId && /^[0-9a-f-]{8,}$/i.test(sessionId)) args.push('--resume', sessionId);
+  args.push('--append-system-prompt', chatSystemPrompt(docFile));
+  if (model && CLAUDE_MODELS.includes(model)) args.push('--model', model);
+  args.push('--allowedTools', ...CHAT_TOOLS);
+  return args;
+}

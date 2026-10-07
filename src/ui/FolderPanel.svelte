@@ -44,17 +44,18 @@
       <section>
         <h3>Shared folder</h3>
         <p class="hint">
-          Every document Claude may read is mirrored here as <code>.md</code> and
-          <code>.shoulder.json</code>, for git and Claude Code. Edits made to those files elsewhere
-          come back as tracked changes.
+          Every document Claude may read is mirrored here, each in its own folder under
+          <code>Documents</code>. Style guides go in <code>Style/Guides</code>, and
+          <code>Style/Samples</code> is for examples of your own writing, one folder per genre. Edits
+          made to a document's files elsewhere come back as tracked changes.
         </p>
         {@render controls(ws.folder, 'shared')}
       </section>
       <section>
         <h3>Private folder</h3>
         <p class="hint">
-          Documents with Claude off go here instead, so Claude Code never sees them. Keep it outside
-          the shared folder.
+          Documents with Claude off go here instead, in the same layout, so Claude Code never sees
+          them. Keep it outside the shared folder.
         </p>
         {#if n > 0 && ws.privateFolder.status !== 'connected'}
           <p class="state warn">

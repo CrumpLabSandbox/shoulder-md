@@ -5,9 +5,10 @@ description: Propose edits to a shoulder-md document as tracked changes, guided 
 
 # Propose edits to a shoulder-md document
 
-shoulder-md mirrors each document into a folder as `<name>.md` (the clean text) and
-`<name>.shoulder.json` (its history). You never edit either file. You write
-`<name>.proposals.json` beside them; the app picks it up and shows each proposal as a tracked
+shoulder-md mirrors each document into its own folder, `Documents/<name>/`, as `<name>.md` (the
+clean text) and `<name>.shoulder.json` (its history). Style guides are in `Style/Guides/`, and
+examples of the author's past writing are in `Style/Samples/`. You never edit a document's
+`.md` or `.shoulder.json`. You write `<name>.proposals.json` beside them; the app picks it up and shows each proposal as a tracked
 change by "Claude", with your reason and the principle it applies, for the author to accept or
 reject.
 

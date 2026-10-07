@@ -4,10 +4,13 @@
   let {
     ws,
     onaskclaude,
+    onchat,
   }: {
     ws: Workspace;
     /** Opens the Ask Claude panel; only given in the Mac app. */
     onaskclaude?: () => void;
+    /** Opens the chat panel; only given in the Mac app. */
+    onchat?: () => void;
   } = $props();
 
   let open = $state(false);
@@ -108,6 +111,14 @@
               open = false;
               onaskclaude();
             }}>Ask Claude to suggest edits…</button
+          >
+        {/if}
+        {#if onchat && ws.claudeOn && !isGuide}
+          <button
+            onclick={() => {
+              open = false;
+              onchat();
+            }}>Chat with Claude…</button
           >
         {/if}
         <button

@@ -14,6 +14,8 @@ import { cleanToRevision, tokenize, type OpBuilder } from './merge';
 
 export const PROPOSALS_EXT = '.proposals.json';
 export const SKIPPED_EXT = '.proposals.skipped.json';
+/** A complete revised copy of a document, written by Claude Code for a larger rewrite. */
+export const REVISION_EXT = '.revision.md';
 
 export type Proposal = {
   quote: string;
@@ -183,4 +185,23 @@ export function proposalOps(
       out.push({ ...base, id: opts.id(), type: 'set_principles', changeId, principles: ids });
   }
   return out;
+}
+
+/**
+ * A revision file: the whole document as it should read, optionally led by an HTML comment
+ * `<!-- reason: ... -->` that explains the revision. The app diffs the text against the
+ * document and shows the differences as tracked changes sharing that reason.
+ */
+export function parseRevision(file: string): { reason?: string; text: string } {
+  const m = /^\s*<!--\s*reason:\s*([\s\S]*?)\s*-->[ \t]*\r?\n?/.exec(file);
+  if (!m) return { text: file };
+  const reason = m[1]!.replace(/\s+/g, ' ').trim();
+  return { ...(reason ? { reason } : {}), text: file.slice(m[0].length).replace(/^(\r?\n)+/, '') };
+}
+
+/** The revised text with the document's own leading and trailing whitespace, so only words differ. */
+export function alignRevision(clean: string, revised: string): string {
+  const lead = /^\s*/.exec(clean)![0];
+  const tail = /\s*$/.exec(clean.slice(lead.length))![0];
+  return lead + revised.trim() + tail;
 }

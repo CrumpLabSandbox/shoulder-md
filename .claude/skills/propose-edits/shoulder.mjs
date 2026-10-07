@@ -29,16 +29,32 @@ if (!existsSync(jsonPath))
 
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'));
 
-/** Every synced document in the folder: file stem, id and metadata. */
+/**
+ * Folders that may hold synced documents. In the current layout a document lives in
+ * `<root>/Documents/<name>/` and the guides in `<root>/Style/Guides/`; older folders keep
+ * everything side by side.
+ */
+function places() {
+  const out = [dir];
+  if (path.basename(path.dirname(dir)) === 'Documents')
+    out.push(path.join(dir, '..', '..', 'Style', 'Guides'));
+  out.push(path.join(dir, 'Style', 'Guides'));
+  return out.filter((d) => existsSync(d));
+}
+
+/** Every synced document in those folders: where it is, its file stem, id and metadata. */
 function siblings() {
   const out = [];
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith('.shoulder.json') || name.includes('.conflict-')) continue;
-    try {
-      const doc = readJson(path.join(dir, name));
-      out.push({ stem: name.slice(0, -'.shoulder.json'.length), id: doc.id, meta: doc.state.meta });
-    } catch {
-      // unreadable: not a document we can use
+  for (const where of places()) {
+    for (const name of readdirSync(where)) {
+      if (!name.endsWith('.shoulder.json') || name.includes('.conflict-')) continue;
+      try {
+        const doc = readJson(path.join(where, name));
+        const stem = name.slice(0, -'.shoulder.json'.length);
+        out.push({ where, stem, id: doc.id, meta: doc.state.meta });
+      } catch {
+        // unreadable: not a document we can use
+      }
     }
   }
   return out;
@@ -57,10 +73,10 @@ function principleIds(file) {
 
 function guides() {
   const all = siblings();
-  const self = all.find((d) => d.stem === base);
+  const self = all.find((d) => d.where === dir && d.stem === base);
   const baseGuide = all.find((d) => d.meta.guide?.role === 'base');
   const genre = self?.meta.genre ? all.find((d) => d.id === self.meta.genre) : undefined;
-  const file = (d) => (d ? path.join(dir, `${d.stem}.md`) : undefined);
+  const file = (d) => (d ? path.join(d.where, `${d.stem}.md`) : undefined);
   return {
     self,
     baseGuide: file(baseGuide),

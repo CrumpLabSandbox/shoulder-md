@@ -8,11 +8,15 @@ contextBridge.exposeInMainWorld('shoulderApp', {
     stat: (dir, name) => ipcRenderer.invoke('fs:stat', dir, name),
     read: (dir, name) => ipcRenderer.invoke('fs:read', dir, name),
     write: (dir, name, content) => ipcRenderer.invoke('fs:write', dir, name, content),
+    mkdir: (dir, name) => ipcRenderer.invoke('fs:mkdir', dir, name),
     remove: (dir, name) => ipcRenderer.invoke('fs:remove', dir, name),
   },
   claude: {
     status: () => ipcRenderer.invoke('claude:status'),
-    ask: (folder, docFile, note) => ipcRenderer.invoke('claude:ask', folder, docFile, note),
+    ask: (folder, docFile, note, model) =>
+      ipcRenderer.invoke('claude:ask', folder, docFile, note, model),
+    chat: (folder, docFile, message, sessionId, model) =>
+      ipcRenderer.invoke('claude:chat', folder, docFile, message, sessionId, model),
     cancel: () => ipcRenderer.invoke('claude:cancel'),
     onEvent: (handler) => {
       const listener = (_event, e) => handler(e);

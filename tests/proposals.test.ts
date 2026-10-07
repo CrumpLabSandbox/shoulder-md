@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { harness, type Harness } from './helpers/model';
 import { memoryDir } from './helpers/memfs';
-import { FolderSync, memoryFolderStore } from '../src/folder/sync';
+import { FLAT, FolderSync, memoryFolderStore } from '../src/folder/sync';
 import {
+  alignRevision,
   parseProposals,
+  parseRevision,
   placeProposals,
   proposalOps,
   ProposalError,
@@ -123,9 +125,40 @@ describe('proposals', () => {
     expect(h.clean()).toBe(TEXT.replace('Plan', 'Proposal'));
   });
 
-  it('is found next to the document in the folder, and cleared once handled', async () => {
+  it('reads a revision file: an optional reason comment, then the whole document', () => {
+    expect(
+      parseRevision('<!-- reason: Reorganised around\n the aims. -->\n\n# Plan\n\nText.\n'),
+    ).toEqual({ reason: 'Reorganised around the aims.', text: '# Plan\n\nText.\n' });
+    expect(parseRevision('# Plan\n\nText.')).toEqual({ text: '# Plan\n\nText.' });
+    expect(parseRevision('<!-- reason:  -->\nText')).toEqual({ text: 'Text' });
+    // The document's own leading and trailing whitespace is kept, so it is not a change.
+    expect(alignRevision('\n# Plan\n\nOld.\n\n', '# Plan\n\nNew.')).toBe('\n# Plan\n\nNew.\n\n');
+    expect(alignRevision('Old.', '\n\nNew.\n')).toBe('New.');
+  });
+
+  it('keeps a revision file beside its document, and removes it once handled', async () => {
     const fs = memoryDir();
     const sync = new FolderSync(fs.dir, memoryFolderStore());
+    const h = harness('# My Plan\n\nHello there.');
+    await sync.write(h.doc);
+    expect(await sync.revision('doc')).toBeUndefined();
+    fs.writeOutside(
+      'Documents/my-plan/my-plan.revision.md',
+      '<!-- reason: x -->\n# My Plan\n\nHi.',
+    );
+    expect(await sync.revision('doc')).toMatchObject({ file: 'my-plan.revision.md' });
+    expect(await sync.check(h.doc)).toEqual({ kind: 'none' });
+    expect(await sync.scan(['doc'], [])).toEqual([]);
+    await sync.clearRevision('doc');
+    expect(fs.names()).toEqual([
+      'Documents/my-plan/my-plan.md',
+      'Documents/my-plan/my-plan.shoulder.json',
+    ]);
+  });
+
+  it('is found next to the document in the folder, and cleared once handled', async () => {
+    const fs = memoryDir();
+    const sync = new FolderSync(fs.dir, memoryFolderStore(), undefined, FLAT);
     const h = harness('# My Plan\n\nHello there.');
     await sync.write(h.doc);
     expect(await sync.proposals('doc')).toBeUndefined();

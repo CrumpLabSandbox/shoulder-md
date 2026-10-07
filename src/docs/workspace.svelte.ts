@@ -20,7 +20,7 @@ import {
 import { FolderSync, type External } from '../folder/sync';
 import { folderSupported, permissionOf, pickFolder, type DirHandleLike } from '../folder/fs';
 import { reviveHandle, sameNativeFolder, storableHandle, type NativeDir } from '../folder/native';
-import { appBridge } from '../app/bridge';
+import { appBridge, type ClaudeEvent } from '../app/bridge';
 import { cleanToRevision, editsToMatch, type OpBuilder } from '../folder/merge';
 import {
   baseGuideTemplate,
@@ -43,7 +43,9 @@ import { createAutosave, type SaveStatus } from '../persist/autosave';
 import { displayTitle } from './title';
 import { authorColor, CLAUDE_AUTHOR, DISK_AUTHOR } from './identity';
 import {
+  alignRevision,
   parseProposals,
+  parseRevision,
   placeProposals,
   proposalOps,
   ProposalError,
@@ -75,6 +77,9 @@ import { bufferChangesFor } from '../editor/sync';
 /** Same op log: same length and the very same last op (a typing run replaces its op in place). */
 const sameLog = (a: Document, b: Document) =>
   a.ops.length === b.ops.length && a.ops[a.ops.length - 1] === b.ops[b.ops.length - 1];
+
+/** Changes in a revision that are this few unchanged characters apart are shown as one. */
+const REVISION_JOIN = 24;
 
 const LAST_DOC_KEY = 'shoulder-md:lastDoc';
 const UNDO_GROUP_MS = 500;
@@ -250,6 +255,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     pushMarks();
     if (external && external.docId !== id) external = undefined;
     if (proposalOffer && proposalOffer.docId !== id) proposalOffer = undefined;
+    if (revisionOffer && revisionOffer.docId !== id) revisionOffer = undefined;
     void poll();
   }
 
@@ -798,6 +804,11 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
   >(undefined);
   /** The proposals file last dealt with, so it is not offered or reported twice. */
   let proposalsSeen = '';
+  /** A revised copy of the open document from Claude Code, waiting to be shown as changes. */
+  let revisionOffer = $state.raw<
+    { docId: string; file: string; key: string; text: string; reason?: string } | undefined
+  >(undefined);
+  let revisionSeen = '';
   const syncs: Record<FolderKind, FolderSync | undefined> = {
     shared: undefined,
     private: undefined,
@@ -896,6 +907,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     syncs[kind] = sync;
     setFolder(kind, { status: 'connected', name: handle.name });
     try {
+      await sync.prepare();
       const found = await sync.scan(
         docs.map((d) => d.id),
         await getTombstones(),
@@ -1041,7 +1053,10 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       if (ext.kind === 'missing') folderWriter.schedule({ doc, force: false });
       else if (ext.kind !== 'none') external = { docId: doc.id, ext };
       // Claude Code only works in the shared folder, so proposals are only looked for there.
-      else if (kind === 'shared') await checkProposals(sync, doc);
+      else if (kind === 'shared') {
+        await checkProposals(sync, doc);
+        await checkRevision(sync, doc);
+      }
     } catch (e) {
       folderFailed(kind, e);
     } finally {
@@ -1072,6 +1087,93 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       proposalsSeen = found.key;
       proposalOffer = undefined;
       folderNotice = `${found.file} could not be used: ${e instanceof Error ? e.message : String(e)}.`;
+    }
+  }
+
+  async function checkRevision(sync: FolderSync, doc: Document): Promise<void> {
+    const found = await sync.revision(doc.id);
+    if (current?.id !== doc.id) return;
+    if (!found) {
+      if (revisionOffer?.docId === doc.id) revisionOffer = undefined;
+      return;
+    }
+    if (found.key === revisionOffer?.key || found.key === revisionSeen) return;
+    revisionOffer = {
+      docId: doc.id,
+      file: found.file,
+      key: found.key,
+      ...parseRevision(found.text),
+    };
+  }
+
+  /**
+   * Shows Claude's revised copy as tracked changes: the differences from the current text, by
+   * Claude, as one undo step, all sharing the revision's reason. The revision file is removed.
+   */
+  async function applyRevision(): Promise<void> {
+    const offer = revisionOffer;
+    if (!offer || !current || current.id !== offer.docId) return;
+    revisionOffer = undefined;
+    revisionSeen = offer.key;
+    const target = alignRevision(viewText(current.state, 'clean'), offer.text);
+    const before = pending.map((c) => c.id);
+    if (view !== 'revision') setView('revision');
+    const sel = bridge?.getSelection() ?? { anchor: 0, head: 0 };
+    const ts = nowIso();
+    const inverse = applyModelOps(
+      // A rewrite touches most words of a sentence; join nearby changes so each reads whole.
+      editsToMatch(current.state, target, {
+        author: CLAUDE_AUTHOR,
+        ts,
+        id: ulid,
+        joinWithin: REVISION_JOIN,
+      }),
+    );
+    const fresh = pendingChanges(current.state)
+      .map((c) => c.id)
+      .filter((id) => !before.includes(id));
+    if (fresh.length > 0) {
+      recordUndo({
+        ops: inverse,
+        before: sel,
+        after: bridge?.getSelection() ?? sel,
+        at: Date.now(),
+      });
+      if (offer.reason) {
+        const r = push({
+          id: ulid(),
+          type: 'set_group_reason',
+          author: CLAUDE_AUTHOR,
+          ts,
+          groupId: ulid(),
+          changeIds: fresh,
+          reason: offer.reason,
+        });
+        schedule([r.op], ts);
+      }
+      await autosave.flush();
+    }
+    try {
+      await syncs.shared?.clearRevision(offer.docId);
+    } catch (e) {
+      folderFailed('shared', e);
+    }
+    const n = fresh.length;
+    folderNotice =
+      n > 0
+        ? `Loaded Claude’s revision as ${n} tracked ${n === 1 ? 'change' : 'changes'}. Use Clean and Original to read it against what you had.`
+        : 'Claude’s revision is the same as the document, so there is nothing to show.';
+  }
+
+  async function discardRevision(): Promise<void> {
+    const offer = revisionOffer;
+    if (!offer) return;
+    revisionOffer = undefined;
+    revisionSeen = offer.key;
+    try {
+      await syncs.shared?.clearRevision(offer.docId);
+    } catch (e) {
+      folderFailed('shared', e);
     }
   }
 
@@ -1145,7 +1247,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
   let claudeRun = $state.raw<ClaudeRun | undefined>(undefined);
 
   /** Why Claude cannot be asked about the open document right now, or undefined if it can. */
-  async function claudeBlocked(): Promise<string | undefined> {
+  async function claudeBlocked(use: 'edits' | 'chat' = 'edits'): Promise<string | undefined> {
     const bridge = appBridge();
     if (!bridge) return 'Asking Claude from inside the app needs the Mac app.';
     if (!current) return 'Open a document first.';
@@ -1156,9 +1258,10 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     const sync = syncs.shared;
     if (!sync || !isConnected('shared') || !('nativePath' in sync.dir))
       return 'Choose a shared folder first (Library → Folders). Claude Code works on the copy there.';
-    if (proposalOffer?.docId === current.id)
+    if (use === 'edits' && proposalOffer?.docId === current.id)
       return 'Claude’s earlier proposals for this document are still waiting. Show or discard them first.';
-    if (claudeRun?.status === 'running') return 'Claude is already working on a document.';
+    if (claudeRun?.status === 'running' || Object.values(chats).some((c) => c.running))
+      return 'Claude is already working on a document.';
     const status = await bridge.claude.status();
     if (!status.available)
       return 'Claude Code is not installed on this Mac. Install it, run “claude” once in Terminal to sign in, then try again. The app uses that sign-in and holds no credentials of its own.';
@@ -1169,7 +1272,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
    * Has the user's own Claude Code read the open document and its guides and write proposals
    * next to it (the propose-edits skill). The proposals then arrive through the folder poll.
    */
-  async function askClaude(note?: string): Promise<void> {
+  async function askClaude(note?: string, model?: string): Promise<void> {
     const bridge = appBridge();
     const doc = current;
     if (!bridge || !doc || (await claudeBlocked())) return;
@@ -1192,23 +1295,104 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     claudeRun = { docId: doc.id, title, status: 'running', steps: [], summary: '' };
     const stop = bridge.claude.onEvent((e) => {
       const run = claudeRun;
-      if (!run || run.docId !== doc.id) return;
-      if (e.kind === 'step') claudeRun = { ...run, steps: [...run.steps, e.text] };
-      else if (e.kind === 'done') claudeRun = { ...run, status: 'done', summary: e.text };
-      else if (e.kind === 'error') claudeRun = { ...run, status: 'error', summary: e.text };
+      if (run?.docId === doc.id && run.status === 'running' && e.kind === 'step')
+        claudeRun = { ...run, steps: [...run.steps, e.text] };
     });
+    let outcome: { kind: string; text: string };
     try {
-      await bridge.claude.ask((sync.dir as NativeDir).nativePath, file, note);
+      outcome = await bridge.claude.ask((sync.dir as NativeDir).nativePath, file, note, model);
     } catch (e) {
-      claudeRun = {
-        ...claudeRun!,
-        status: 'error',
-        summary: e instanceof Error ? e.message : String(e),
-      };
+      outcome = { kind: 'error', text: e instanceof Error ? e.message : String(e) };
     } finally {
       stop();
-      if (claudeRun?.status === 'running') claudeRun = { ...claudeRun, status: 'done' };
     }
+    if (claudeRun?.docId === doc.id)
+      claudeRun = {
+        ...claudeRun,
+        status: outcome.kind === 'error' ? 'error' : 'done',
+        summary: outcome.text,
+      };
+    void poll();
+  }
+
+  /* ---------- chatting with Claude Code about the open document ---------- */
+
+  type ChatMessage = { role: 'you' | 'claude' | 'error'; text: string };
+  type Chat = { messages: ChatMessage[]; sessionId?: string; running: boolean; steps: string[] };
+  const NO_CHAT: Chat = { messages: [], running: false, steps: [] };
+  /** One conversation per document, kept while the app is open. */
+  let chats = $state.raw<Record<string, Chat>>({});
+  const chat = $derived<Chat>((current && chats[current.id]) || NO_CHAT);
+
+  function setChat(docId: string, f: (c: Chat) => Chat) {
+    chats = { ...chats, [docId]: f(chats[docId] ?? NO_CHAT) };
+  }
+
+  /**
+   * Sends one message about the open document. Claude Code may answer, write per-edit
+   * proposals, or write a revised copy; whatever it writes arrives through the folder poll.
+   */
+  async function sendChat(message: string, model?: string): Promise<void> {
+    const text = message.trim();
+    const bridge = appBridge();
+    const doc = current;
+    if (!text || !bridge || !doc) return;
+    const id = doc.id;
+    const blocked = await claudeBlocked('chat');
+    if (blocked) {
+      setChat(id, (c) => ({
+        ...c,
+        messages: [...c.messages, { role: 'you', text }, { role: 'error', text: blocked }],
+      }));
+      return;
+    }
+    const sync = syncs.shared!;
+    setChat(id, (c) => ({
+      ...c,
+      running: true,
+      steps: [],
+      messages: [...c.messages, { role: 'you', text }],
+    }));
+    // Claude Code reads the copy on disk, so make sure it is current.
+    await autosave.flush();
+    await folderWriter.flush();
+    const file = await sync.fileName(id);
+    const stop = bridge.claude.onEvent((e) => {
+      if (e.kind === 'step')
+        setChat(id, (c) => (c.running ? { ...c, steps: [...c.steps, e.text] } : c));
+    });
+    let outcome: ClaudeEvent;
+    try {
+      outcome = file
+        ? await bridge.claude.chat(
+            (sync.dir as NativeDir).nativePath,
+            file,
+            text,
+            chats[id]?.sessionId,
+            model,
+          )
+        : { kind: 'error', text: 'This document has not been written to the shared folder yet.' };
+    } catch (e) {
+      outcome = { kind: 'error', text: e instanceof Error ? e.message : String(e) };
+    } finally {
+      stop();
+    }
+    setChat(id, (c) => ({
+      messages: [
+        ...c.messages,
+        {
+          role: outcome.kind === 'error' ? 'error' : 'claude',
+          text: outcome.text || (outcome.kind === 'error' ? 'Something went wrong.' : 'Done.'),
+        },
+      ],
+      running: false,
+      steps: [],
+      ...(outcome.sessionId
+        ? { sessionId: outcome.sessionId }
+        : c.sessionId
+          ? { sessionId: c.sessionId }
+          : {}),
+    }));
     void poll();
   }
 
@@ -1761,6 +1945,18 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     dismissClaude: () => {
       if (claudeRun?.status !== 'running') claudeRun = undefined;
     },
+    get chat() {
+      return chat;
+    },
+    sendChat,
+    clearChat: () => {
+      if (current && !chat.running) setChat(current.id, () => NO_CHAT);
+    },
+    get revisionOffer() {
+      return revisionOffer;
+    },
+    applyRevision,
+    discardRevision,
     get proposalOffer() {
       return proposalOffer;
     },

@@ -112,6 +112,24 @@ export function textHunks(a: string, b: string): Hunk[] {
   }));
 }
 
+/**
+ * Joins hunks that are only a few unchanged characters apart, so a rewritten sentence reads as
+ * one change instead of a dozen single-word ones. Hunks on different lines are never joined,
+ * and a hunk that adds a line break (a new paragraph, say) stays a change of its own.
+ */
+export function coarsen(a: string, hunks: readonly Hunk[], maxGap: number): Hunk[] {
+  const out: Hunk[] = [];
+  for (const h of hunks) {
+    const last = out[out.length - 1];
+    const gap = last ? a.slice(last.to, h.from) : '';
+    const breaks = (s: string) => s.includes('\n');
+    if (last && gap.length <= maxGap && !breaks(gap) && !breaks(last.insert) && !breaks(h.insert))
+      out[out.length - 1] = { from: last.from, to: h.to, insert: last.insert + gap + h.insert };
+    else out.push({ ...h });
+  }
+  return out;
+}
+
 /** The revision offset where clean offset `c` sits (before any pending deletions at that spot). */
 export function cleanToRevision(state: State, c: number): number {
   let rev = 0;
@@ -134,16 +152,19 @@ export function cleanToRevision(state: State, c: number): number {
 export type OpBuilder = (state: State) => Op | undefined;
 
 /**
- * Builders for tracked edit ops that turn the document's clean text into `target`. They must be
+ * Builders for tracked edit ops that turn the document's clean text into `target`. With
+ * `joinWithin`, changes that close together become one (for rewrites). They must be
  * applied in order, each against the state the previous one leaves (later hunks come first, so
  * clean offsets of the remaining hunks stay valid).
  */
 export function editsToMatch(
   state: State,
   target: string,
-  opts: { author: string; ts: string; id: () => string },
+  opts: { author: string; ts: string; id: () => string; joinWithin?: number },
 ): OpBuilder[] {
-  const hunks = textHunks(viewText(state, 'clean'), target);
+  const clean = viewText(state, 'clean');
+  const fine = textHunks(clean, target);
+  const hunks = opts.joinWithin ? coarsen(clean, fine, opts.joinWithin) : fine;
   return hunks
     .slice()
     .reverse()
