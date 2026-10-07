@@ -54,6 +54,11 @@ describe('settings', () => {
 
   it('hides reason tags by default and keeps the choice out of presets', () => {
     expect(DEFAULT_SETTINGS.showReasonTags).toBe(false);
+    expect(DEFAULT_SETTINGS.showReasonField).toBe(true);
+    expect(sanitize({ ...DEFAULT_SETTINGS, showReasonField: false }).showReasonField).toBe(false);
+    expect(sanitize({ ...DEFAULT_SETTINGS, showReasonField: 'no' as never }).showReasonField).toBe(
+      true,
+    );
     const on = withChange(applyPreset(DEFAULT_SETTINGS, 'mono'), 'showReasonTags', true);
     expect(on.showReasonTags).toBe(true);
     expect(on.preset).toBe('mono');

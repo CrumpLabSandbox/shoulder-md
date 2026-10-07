@@ -3,6 +3,9 @@
  * runs against real directory handles in Chrome and Edge and an in-memory folder in tests.
  */
 
+import { appBridge } from '../app/bridge';
+import { nativeDir } from './native';
+
 export type Permission = 'granted' | 'denied' | 'prompt';
 
 export interface FileLike {
@@ -39,6 +42,7 @@ type PickerWindow = {
 };
 
 export function folderSupported(): boolean {
+  if (appBridge()) return true;
   return (
     typeof window !== 'undefined' &&
     typeof (window as PickerWindow).showDirectoryPicker === 'function'
@@ -47,6 +51,12 @@ export function folderSupported(): boolean {
 
 /** Opens the system folder picker. Rejects with an AbortError if the user cancels. */
 export async function pickFolder(): Promise<DirHandleLike> {
+  const bridge = appBridge();
+  if (bridge) {
+    const picked = await bridge.pickFolder();
+    if (!picked) throw Object.assign(new Error('No folder chosen'), { name: 'AbortError' });
+    return nativeDir(picked.path, picked.name, bridge.fs);
+  }
   const picker = (window as PickerWindow).showDirectoryPicker;
   if (!picker) throw new Error('This browser cannot save to a folder. Use Chrome or Edge.');
   return picker({ id: 'shoulder-md', mode: 'readwrite' });

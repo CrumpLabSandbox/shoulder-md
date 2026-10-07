@@ -9,7 +9,7 @@ export type Hunk = { from: number; to: number; insert: string };
 
 const TOKEN = /\s+|[\p{L}\p{N}_'’]+|[^\s\p{L}\p{N}_'’]/gu;
 
-function tokenize(s: string): string[] {
+export function tokenize(s: string): string[] {
   return s.match(TOKEN) ?? [];
 }
 

@@ -2,7 +2,7 @@
 
 A browser-based Markdown editor with Word-style tracked changes and comments, built on a structured JSON layer that records every edit and the reason for it. Exports to Markdown, Word, PDF, or the full JSON. Over time, a library of edited documents whose history can teach Claude to edit the way this writer edits.
 
-Status: phases 0 to 7 built (writing app with autosave, fonts and preview; sentence-level model and op log; Word-style tracked changes with reasons, accept/reject, views, and model-level undo; comment threads in the same margin; exports to Markdown, CriticMarkup, Word, JSON and PDF, with CriticMarkup and JSON import; the edits library with its JSONL change-record export; folder sync to a local directory or git repo; style guides with stable principle ids, genres, the per-document Claude switch and the private folder). Next is phase 8, the principle inbox. This document is the spec for v1 and the roadmap after it.
+Status: phases 0 to 7 built (writing app with autosave, fonts and preview; sentence-level model and op log; Word-style tracked changes with reasons, accept/reject, views, and model-level undo; comment threads in the same margin; exports to Markdown, CriticMarkup, Word, JSON and PDF, with CriticMarkup and JSON import; the edits library with its JSONL change-record export; folder sync to a local directory or git repo; style guides with stable principle ids, genres, the per-document Claude switch and the private folder). Phase 9 (Claude proposing edits as tracked changes, through Claude Code and the shared folder) is also built. A Mac app (Electron shell with native menus and direct folder access) wraps the same build. Next is phase 8, the principle inbox. This document is the spec for v1 and the roadmap after it.
 
 ---
 
@@ -191,6 +191,7 @@ Every op has `id`, `author`, and `ts`. Text-affecting ops also carry `alloc` (th
 | `reject` | changeIds | `ins` spans removed; `del` → text |
 | `splice` | from, to (absolute revision offsets), spans, records? | Raw replacement of a range with the given spans, marks included, then restore the given change records. The inverse of every other text op; how undo and redo are logged |
 | `set_reason` | changeId, reason, reasonTags | Attach or edit a reason |
+| `set_group_reason` | groupId, changeIds, reason | One reason for a set of changes, kept beside each change's own reason as `group: { id, reason }` on the record; no reason clears it |
 | `comment_add` | threadId, commentId, anchor, body, changeId? | Anchor: first-to-last sentence ids plus offsets in the first and last |
 | `comment_reply` | threadId, commentId, body | |
 | `comment_edit` | threadId, commentId, body | |
@@ -248,6 +249,8 @@ Requirement: changes are saved consistently behind the scenes, with no save butt
 Design: the op log is append-only, so saving means appending new ops. Each op is tiny. This makes continuous save cheap and robust.
 
 - **Op append**: every editor transaction produces ops that are queued and written to the IndexedDB `ops` store (keyed by document id and sequence number) within ~250 ms (debounced). The write is a single transaction per batch; batches that queue up during a slow write are merged in order.
+- **Typing runs**: a run of typing is one `edit` op, not one per keystroke. Each keystroke is applied on its own (for its undo inverse), then folded into the run's op: the longer op is applied to the state the run started from, and adopted only if it gives the same text, marks, change records and comment ranges (`src/model/coalesce.ts`). The run's op is then rewritten in place at its sequence number; a snapshot that already covered it is retaken. Anything else (a cursor move, a pause past the coalescing window, an undo, any other op) ends the run. Undoing a run logs one `splice`, composed from the per-keystroke inverses. Because the op count no longer changes with every edit, "has the browser moved on" is judged by the last op itself and the folder record keeps the document's `updatedAt`.
+- **The JSON file** is compact, with one op per line so it still diffs line by line in git. Logs written before typing runs keep their per-keystroke ops.
 - **Flush points**: on `blur`, `visibilitychange` to hidden, `pagehide`, and `beforeunload`, the queue is flushed synchronously as far as the browser allows.
 - **Snapshots**: the document header in the `docs` store carries a materialized `state` snapshot, rewritten every 200 ops or 30 s of activity, whichever first, and when the document is closed or switched. Load = snapshot + replay of ops after it, so opening a long document stays fast.
 - **Integrity**: the snapshot carries a hash of its state. On load a mismatch triggers a full replay from the op log and a console warning. In the editor, after every transaction the model's revision text is compared with the buffer; a mismatch is logged as a bug and the model resyncs from the buffer with an `import` op.
@@ -392,7 +395,7 @@ Each phase ends with something usable. Phases 0 and 1 overlap in time.
 
 ### Phase 2: Track changes (built)
 - Tracking toggle (toolbar, ⌘⌥T), insertion and deletion decorations coloured by author, atomic deletion ranges, keystroke coalescing into one change.
-- Change cards in a margin aligned to their anchors (pushed apart when they would overlap): author, time, before → after, accept and reject, then the reason row below the buttons so nothing ever shifts them. Reason tag chips are hidden by default (toggle in the margin menu or Settings); with them hidden, "Why?" opens a free-text reason. Accept all and Reject all sit in a bar under the margin header; accept/reject by author is in the margin menu; next/previous change (⌘⌥N, ⌘⌥P); accept/reject the change at the cursor (⌘⌥A, ⌘⌥R); focus its reason (⌘⌥E).
+- Change cards in a margin aligned to their anchors (pushed apart when they would overlap): author, time, before → after, accept and reject, then the reason row below the buttons so nothing ever shifts them. Reason tag chips are hidden by default (toggle in the margin menu or Settings); the free-text "Why?" field is shown on every card by default (same two places to turn it off, after which a "Why?" button opens it). A second "Why?" field under Accept all and Reject all gives every pending change one shared reason (a group); each card shows it as "Set: …", changes made later are covered when all are accepted or rejected, and the JSONL export carries it as `groupId` and `groupReason`. Accept all and Reject all sit in a bar under the margin header; accept/reject by author is in the margin menu; next/previous change (⌘⌥N, ⌘⌥P); accept/reject the change at the cursor (⌘⌥A, ⌘⌥R); focus its reason (⌘⌥E).
 - Markup, clean, and original views; clean and original are read-only.
 - Undo and redo through the model (see §4), with ⌘Z, ⌘⇧Z, ⌘Y and toolbar buttons.
 - Author name and colour in settings.
@@ -422,23 +425,35 @@ Each phase ends with something usable. Phases 0 and 1 overlap in time.
 - `src/folder/`: `sync.ts` (the engine: stable names, change detection, browser-wins backups, scan and import), `merge.ts` (text → tracked edit ops via a word-level Myers diff), `fs.ts` (the API surface, so tests use an in-memory folder).
 - Verified with unit tests against an in-memory folder, a property test that any target text is reached through tracked edits, and a browser run against a real directory handle from Chromium's origin-private file system: continuous writes, an outside `.md` edit loaded as tracked changes and undone, an op appended by another tool, both sides changing, reconnect on reload, and a fresh browser profile importing the folder.
 - Done: a git repo folder stays in sync while writing. This is also the transport phase 7 can use: Claude Code edits the `.md` (arriving as tracked changes) or appends ops to the `.shoulder.json`.
+- File names are chosen at the first write and do not follow later title changes, except that files named `untitled` (the folder was connected before the document had a title) are renamed, with any waiting proposals, once the title is set or the text moves past its first line.
 
 ### Phase 7: Style guides and genres (built)
 - **Guides are documents** with `meta.guide` (`role: base | genre`, an id `prefix`, and `private` for genres). The Library's "Style guides" panel creates or opens the base guide (prefix `B`) and creates genres (prefix from the name, unique, never `B`) with a Private checkbox. A banner over an open guide counts its principles and, when top-level list items have no id yet, offers "Give them ids", one untracked, undoable edit that writes the next free ids.
 - **Principle syntax** (`src/guides/principles.ts`): a principle is a top-level list item starting `[ID]`; `[P2 replaces B3]` in a genre guide replaces a base principle for that genre. Nested items and quoted lists are explanation. The id is in the text, so rewording or reordering never breaks a link.
 - **Genre and Claude control** in the toolbar: the genre picker, and the Claude switch with three states (genre default, on, off), plus links to the guides. The Library has Genre and Claude columns. Access is `claude` if set; otherwise on without a genre, off if the genre no longer exists, else not private. A private genre's own guide is private too.
 - **Two folders**: Settings → Folder has the shared folder and a private folder (records under `rec:` and `prec:`, roots `root` and `privateRoot` in the `folder` store). Each document is written only to the folder its access picks; a change of access deletes its files from the other folder after a confirm that names the documents and both folders. Without a private folder, Claude-off documents stay in the browser and Settings says how many.
+- **Seeding from a folder**: "Import guides from a folder…" in the Library reads `base.md` and every `<genre>/guide.md` under a picked folder (`src/guides/seed.ts`). A guide the app lacks is created (genre named by the file's first heading, prefix taken from its ids when free); for one it has, only principles it lacks (by id, else by wording) are appended with their indented notes, so a folder can be imported again as it grows. Other files are ignored.
 - **Linking**: the § button on a change card opens a filterable list of the document's principles (base plus genre, replacements applied); links are a `set_principles` op on the change record and appear in the JSONL export with each principle's text and the genre.
 - Verified with unit tests (parsing, numbering, resolution with replacements, stats and replay of the new ops, moving between folders, private folder records) and a browser run against two directories in Chromium's origin-private file system: guide creation and numbering, a document joining a private genre (files moved after a confirm), a link that survives reload, switching Claude on again, and un-privating a genre.
 
 ### Phase 8: The principle inbox
 - The inbox document and its review actions; the edits digest the app writes to the shared folder; the `/suggest-principles` Claude Code command (a skill in the repo) and the inbox file format; suggested links from reasons to principles. See §9.
 
-### Phase 9: Claude as an editor
-- A Claude Code command that writes proposals guided by the document's principles; the app turns them into tracked changes by "Claude". See §9.
+### Phase 9: Claude as an editor (built, ahead of phase 8)
+- **Proposals file**: `<name>.proposals.json` next to the document in the shared folder: `{ "document": id, "proposals": [{ "quote", "replacement", "principles", "reason" }] }`. A quote must occur exactly once in the clean text (whitespace runs may differ); the app narrows each proposal to the words that change (`src/folder/proposals.ts`).
+- **In the app**: the folder poll finds the file for the open document and shows a banner. "Show as tracked changes" adds one tracked change per proposal by the built-in author "Claude", with the reason set and the principles linked (ids the document's guides do not have are dropped), as a single undo step. Proposals that cannot be placed (missing, repeated, overlapping, or no change) are kept in `<name>.proposals.skipped.json`; the proposals file is removed either way. "Discard" removes it without applying.
+- **In Claude Code**: the `propose-edits` skill (`.claude/skills/propose-edits/`) reads the document's `.md` and its base and genre guides, writes the proposals file, and validates it with the bundled `shoulder.mjs check`. It never edits the `.md` or `.shoulder.json`.
+- Only looked for in the shared folder, so documents with Claude off are never touched.
 
 ### Phase 10: Measurement
 - Once the guide has grown: held-out edits, Claude's edits of the same sentences with the guide, side-by-side comparison and a match rate over time. See §9.
+
+### The Mac app (built)
+- An Electron shell around the same web build (`electron/`, `pnpm app`, `pnpm app:build`), added so the app can have native menus, remember its folders without permission prompts, and later run Claude Code itself (a browser page cannot). The browser version keeps working unchanged.
+- **Menus**: File (new, import, documents, library, sync folder, exports, print), Edit (undo and redo routed to the model, or to the focused text field), View, Changes, Window. Each item sends a command name to the page (`src/app/commands.ts`).
+- **Folders**: picked with the system dialog and used through a small file bridge restricted to the picked folders; stored as a path, so they reconnect silently on launch (`src/folder/native.ts`).
+- **Storage** is unchanged: documents live in the app's own IndexedDB (served from the fixed origin `app://shoulder`), separate from any browser's. Connecting an existing synced folder brings its documents and guides in. Making the folder the primary store is a separate decision, not yet made.
+- Packaged unsigned (ad-hoc) for this machine only; no icon, auto-update, or notarization yet.
 
 ### Later, unscheduled
 - Word import: plain text first, then revisions and comments.

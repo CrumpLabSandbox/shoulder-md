@@ -49,7 +49,11 @@ export function authorColor(id: string, known: readonly Author[] = []): string {
 
 /** Authors that are not people: edits loaded from the folder, and (phase 7) Claude. */
 export const DISK_AUTHOR = 'disk';
-const BUILTIN_NAMES: Record<string, string> = { [DISK_AUTHOR]: 'Edited on disk', claude: 'Claude' };
+export const CLAUDE_AUTHOR = 'claude';
+const BUILTIN_NAMES: Record<string, string> = {
+  [DISK_AUTHOR]: 'Edited on disk',
+  [CLAUDE_AUTHOR]: 'Claude',
+};
 
 export function authorName(id: string, known: readonly Author[] = []): string {
   return known.find((a) => a.id === id)?.name ?? BUILTIN_NAMES[id] ?? id;

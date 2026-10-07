@@ -267,6 +267,19 @@ export function applyOp(state: State, op: Op, ctx: ApplyContext = {}): Applied {
       };
     }
 
+    case 'set_group_reason': {
+      const changes = { ...state.changes };
+      for (const id of op.changeIds) {
+        const rec = changes[id];
+        if (!rec) throw new ModelError(`set_group_reason: unknown change ${id}`);
+        const next = { ...rec };
+        if (op.reason === undefined) delete next.group;
+        else next.group = { id: op.groupId, reason: op.reason };
+        changes[id] = next;
+      }
+      return { state: { ...state, changes }, op, inverse: [] };
+    }
+
     case 'comment_add': {
       const thread: CommentThread = {
         id: op.threadId,

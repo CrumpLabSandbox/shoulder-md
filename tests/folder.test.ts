@@ -130,6 +130,78 @@ describe('FolderSync', () => {
     expect(await sync.check(d)).toMatchObject({ kind: 'invalid' });
   });
 
+  it('writes again when a typing run grew its op without adding one', async () => {
+    const fs = memoryDir();
+    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed);
+    const d = doc('Hello world.', 'd1', 'Hello world');
+    const short = withEdit(d, 'Mo');
+    await sync.write(short);
+    const grown = { ...withEdit(d, 'More. '), updatedAt: '2026-10-06T00:00:02Z' };
+    expect(grown.ops.map((o) => o.id)).toEqual(short.ops.map((o) => o.id));
+    expect((await sync.write(grown)).written).toBe(true);
+    expect(fs.read('hello-world.md')).toBe('More. Hello world.');
+    expect((await sync.write(grown)).written).toBe(false);
+    // An outside copy holding the shorter op is a different history, not an extension.
+    fs.writeOutside('hello-world.shoulder.json', exportJson(withEdit(short, 'Z')));
+    expect(await sync.check(grown)).toMatchObject({ kind: 'json', extendsLocal: false });
+  });
+
+  it('renames files that were named while the document was untitled', async () => {
+    const fs = memoryDir();
+    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed);
+    const meta = (d: Document, title: string): Document =>
+      appendOp(d, {
+        id: `m${d.ops.length}`,
+        type: 'set_meta',
+        author: 'me',
+        ts: 't',
+        patch: { title },
+      }).doc;
+    const empty = doc('');
+    await sync.write(empty);
+    expect(fs.names()).toEqual(['untitled.md', 'untitled.shoulder.json']);
+    fs.writeOutside('untitled.proposals.json', '{"proposals":[]}');
+
+    // Still on its first line: the derived title is not settled, so the name stays.
+    const typing = withEdit(empty, 'Fellowship Le');
+    expect((await sync.write(typing)).renamed).toBeUndefined();
+    expect(fs.names()).toContain('untitled.md');
+
+    // An explicit title settles it; the old files go and waiting proposals move along.
+    const titled = meta(typing, 'Sabbatical application');
+    const r = await sync.write(titled);
+    expect(r.renamed).toEqual({ from: 'untitled.md', to: 'sabbatical-application.md' });
+    expect(fs.names()).toEqual([
+      'sabbatical-application.md',
+      'sabbatical-application.proposals.json',
+      'sabbatical-application.shoulder.json',
+    ]);
+    expect((await sync.proposals('d1'))?.file).toBe('sabbatical-application.proposals.json');
+    expect(await sync.check(titled)).toEqual({ kind: 'none' });
+    expect((await sync.write(titled)).written).toBe(false);
+    // A later title change does not rename again.
+    await sync.write(meta(titled, 'Something else'));
+    expect(fs.names()).toContain('sabbatical-application.md');
+  });
+
+  it('renames an untitled file once the text has moved past its first line, even if unchanged since', async () => {
+    const fs = memoryDir();
+    const store = memoryFolderStore();
+    const sync = new FolderSync(fs.dir, store, fixed);
+    const d = doc('# Leave proposal\n\nBody text.', 'd2');
+    // As if it had been written under a placeholder name earlier.
+    await store.put({ docId: 'd2', base: 'untitled-2', opCount: -1 });
+    expect((await sync.write(d)).renamed?.to).toBe('leave-proposal.md');
+    // An outside edit under the old name is settled first, not renamed away.
+    const other = doc('', 'd3');
+    await sync.write(other);
+    fs.writeOutside('untitled.md', 'Edited outside.\n\nMore.');
+    const typed = withEdit(other, 'Title line\n\nText');
+    const r = await sync.write(typed);
+    expect(r.renamed).toBeUndefined();
+    expect(fs.names()).toContain('untitled.md');
+  });
+
   it('rewrites missing files', async () => {
     const fs = memoryDir();
     const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed);

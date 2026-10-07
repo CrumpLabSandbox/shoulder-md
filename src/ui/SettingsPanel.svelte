@@ -226,6 +226,14 @@
       />
       <span>Show reason tags on change cards</span>
     </label>
+    <label class="row">
+      <input
+        type="checkbox"
+        checked={s.showReasonField}
+        onchange={(e) => store.set('showReasonField', e.currentTarget.checked)}
+      />
+      <span>Show the “Why?” field on change cards</span>
+    </label>
   </section>
 
   <section>

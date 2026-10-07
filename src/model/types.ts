@@ -62,6 +62,11 @@ export type ChangeRecord = {
   status: ChangeStatus;
   reason?: string;
   reasonTags?: string[];
+  /**
+   * A reason shared by a set of changes, written at the accept-all level. It sits beside the
+   * change's own reason; changes explained together carry the same group id.
+   */
+  group?: { id: string; reason: string };
   /** Ids of the style guide principles this change applies (see src/guides/principles.ts). */
   principles?: string[];
   decidedBy?: string;
@@ -179,6 +184,13 @@ export type Op = OpBase &
       } & StructuralOp)
     | { type: 'set_reason'; changeId: string; reason?: string; reasonTags?: string[] }
     | { type: 'set_principles'; changeId: string; principles: string[] }
+    | {
+        /** One reason for a set of changes; no reason removes the changes from their group. */
+        type: 'set_group_reason';
+        groupId: string;
+        changeIds: string[];
+        reason?: string;
+      }
     | {
         type: 'comment_add';
         threadId: string;

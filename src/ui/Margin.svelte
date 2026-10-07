@@ -12,11 +12,16 @@
     tick,
     showTags,
     ontoggletags,
+    showReason,
+    ontogglereason,
   }: {
     ws: Workspace;
     /** Whether change cards show reason tag chips. */
     showTags: boolean;
     ontoggletags: (show: boolean) => void;
+    /** Whether change cards always show the free-text reason field. */
+    showReason: boolean;
+    ontogglereason: (show: boolean) => void;
     /** Viewport-relative top of a revision offset, from the editor. */
     measure: (pos: number) => number | undefined;
     /** Bumped when the editor scrolls, resizes, or changes, to re-measure. */
@@ -81,6 +86,19 @@
     return `${n} ${n === 1 ? 'change' : 'changes'} · ${m} ${m === 1 ? 'comment' : 'comments'}`;
   });
   let menuOpen = $state(false);
+
+  // One reason for the whole set of pending changes, beside each change's own reason.
+  const groupReason = $derived(ws.pending.find((c) => c.record.group)?.record.group?.reason ?? '');
+  const groupCovered = $derived(ws.pending.filter((c) => c.record.group).length);
+  let groupDraft = $state('');
+  let groupEditing = $state(false);
+  $effect(() => {
+    if (!groupEditing) groupDraft = groupReason;
+  });
+  function commitGroup() {
+    groupEditing = false;
+    if (groupDraft.trim() !== groupReason) ws.setGroupReason(groupDraft);
+  }
 </script>
 
 <aside class="margin no-print" aria-label="Changes and comments">
@@ -118,6 +136,14 @@
           <label class="check">
             <input
               type="checkbox"
+              checked={showReason}
+              onchange={(e) => ontogglereason(e.currentTarget.checked)}
+            />
+            Show “Why?” field on changes
+          </label>
+          <label class="check">
+            <input
+              type="checkbox"
               checked={showTags}
               onchange={(e) => ontoggletags(e.currentTarget.checked)}
             />
@@ -143,6 +169,29 @@
       <button class="reject-all" onclick={() => ws.rejectAll()} title="Reject every pending change">
         ✕ Reject all
       </button>
+      <input
+        class="group-reason"
+        type="text"
+        placeholder="Why? One reason for all of these (optional)"
+        title="A reason for the whole set of changes. Each change can still have its own."
+        aria-label="Reason for all pending changes"
+        bind:value={groupDraft}
+        onfocus={() => (groupEditing = true)}
+        onblur={commitGroup}
+        onkeydown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+          if (e.key === 'Escape') {
+            groupDraft = groupReason;
+            e.currentTarget.blur();
+          }
+        }}
+      />
+      {#if groupReason && groupCovered < ws.pending.length}
+        <p class="group-note">
+          Covers {groupCovered} of {ws.pending.length} changes; accepting or rejecting all applies it
+          to the rest.
+        </p>
+      {/if}
     </div>
   {/if}
   <div class="cards">
@@ -168,6 +217,7 @@
             onreason={(reason, tags) => ws.setReason(it.change.id, reason, tags)}
             onjump={() => ws.jumpTo(it.change.id)}
             {showTags}
+            {showReason}
             reasonRequested={ws.reasonRequest === it.change.id}
             onreasonhandled={() => ws.clearReasonRequest()}
             oncomment={(body) => ws.addComment(body, { changeId: it.change.id })}
@@ -228,6 +278,7 @@
   }
   .bulk {
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     padding: 6px 10px;
     border-bottom: 1px solid var(--border);
@@ -237,6 +288,17 @@
     flex: 1;
     font-size: 12px;
     border: 1px solid var(--border);
+  }
+  .group-reason {
+    flex: none;
+    width: 100%;
+    font-size: 12px;
+  }
+  .group-note {
+    width: 100%;
+    margin: 0;
+    font-size: 11px;
+    color: var(--fg-muted);
   }
   .accept-all:hover {
     background: color-mix(in srgb, #16a34a 15%, transparent);

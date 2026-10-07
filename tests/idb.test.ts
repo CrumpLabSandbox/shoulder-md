@@ -93,6 +93,23 @@ describe('op-log store', () => {
     expect(revisionText(loaded!.doc.state)).toBe('x' + 'y'.repeat(SNAPSHOT_EVERY_OPS));
   });
 
+  it('rewrites the last op in place when a typing run grows, even inside a snapshot', async () => {
+    const created = await createDoc({ text: 'x', author: 'me', tracking: false });
+    const first = edit(created, 1, 1, 'a', 0);
+    expect((await appendOps(first.doc, [first.op], { forceSnapshot: true })).snapshotted).toBe(
+      true,
+    );
+    // The same op, grown: applied to the state before it, replacing it in the log.
+    const grown = edit(created, 1, 1, 'abc', 0);
+    expect(grown.doc.ops).toHaveLength(first.doc.ops.length);
+    expect((await appendOps(grown.doc, [grown.op])).snapshotted).toBe(true);
+    const loaded = await loadDoc(created.id);
+    expect(loaded?.recovered).toBe(false);
+    expect(revisionText(loaded!.doc.state)).toBe('xabc');
+    expect(loaded!.doc.ops).toHaveLength(grown.doc.ops.length);
+    expect(loaded!.doc.state).toEqual(grown.doc.state);
+  });
+
   it('falls back to a full replay when the snapshot is corrupt', async () => {
     const doc = await createDoc({ text: 'Intact.', author: 'me', tracking: false });
     // Corrupt the snapshot hash behind the store's back.

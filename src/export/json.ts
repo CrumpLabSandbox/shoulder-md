@@ -4,8 +4,12 @@ import { SCHEMA_VERSION } from '../model/types';
 import { replay } from '../model/apply';
 import { hashState } from '../model/hash';
 
+/** Compact, with one op per line so the file stays small and still diffs line by line in git. */
 export function exportJson(doc: Document): string {
-  return JSON.stringify(doc, null, 2) + '\n';
+  const { ops, state, ...head } = doc;
+  const start = JSON.stringify(head).slice(0, -1);
+  const lines = ops.map((op) => JSON.stringify(op)).join(',\n');
+  return `${start},\n"ops":[\n${lines}\n],\n"state":${JSON.stringify(state)}}\n`;
 }
 
 export class ImportError extends Error {}

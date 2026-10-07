@@ -127,6 +127,19 @@
     if (id) onclose();
   }
 
+  let seedInput: HTMLInputElement | undefined = $state();
+  let seedResult = $state('');
+
+  /** Reads the Markdown files of a picked folder and hands them to the workspace. */
+  async function importGuides(list: FileList | null) {
+    const picked = [...(list ?? [])].filter((f) => /\.md$/i.test(f.name));
+    const files = await Promise.all(
+      picked.map(async (f) => ({ path: f.webkitRelativePath || f.name, text: await f.text() })),
+    );
+    seedResult = await ws.importSeed(files);
+    await reload();
+  }
+
   async function openBase() {
     await ws.openBaseGuide();
     onclose();
@@ -237,7 +250,24 @@
           ? `Open the base guide (${ws.baseGuide.guide?.principles.length ?? 0})`
           : 'Create the base guide'}</button
       >
+      <button
+        onclick={() => seedInput?.click()}
+        title="Pick a folder holding base.md and one folder per genre with a guide.md. New guides are created; existing ones only gain principles they lack."
+        >Import guides from a folder…</button
+      >
+      <input
+        bind:this={seedInput}
+        type="file"
+        webkitdirectory
+        multiple
+        hidden
+        onchange={(e) => {
+          const input = e.currentTarget;
+          void importGuides(input.files).then(() => (input.value = ''));
+        }}
+      />
     </div>
+    {#if seedResult}<p class="result" role="status">{seedResult}</p>{/if}
     <p class="hint">
       The base guide holds principles for all your writing. A genre adds its own and can replace
       base ones. A private genre keeps Claude off its documents by default.

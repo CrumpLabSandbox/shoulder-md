@@ -15,6 +15,7 @@
     onjump,
     oncomment,
     showTags,
+    showReason,
     reasonRequested,
     onreasonhandled,
     principles = [],
@@ -31,6 +32,8 @@
     oncomment: (body: string) => void;
     /** Show the reason tag chips. When on, the reason row is always shown so nothing shifts. */
     showTags: boolean;
+    /** Always show the free-text reason field; off, it opens from the "Why?" button. */
+    showReason: boolean;
     /** Open the reason field and focus it (⌘⌥E). */
     reasonRequested: boolean;
     onreasonhandled: () => void;
@@ -129,7 +132,7 @@
   const savedTags = $derived(change.record.reasonTags ?? []);
   // Layout never depends on hover or on the cursor position: the reason row is shown when tags
   // are on, when a reason exists, or after the user asked for it.
-  const showReasonRow = $derived(showTags || hasReason || reasonOpen || editing);
+  const showReasonRow = $derived(showReason || showTags || hasReason || reasonOpen || editing);
 </script>
 
 <article class="card" class:active style:--author-color={color} data-change={change.id}>
@@ -203,6 +206,13 @@
         }}
       />
     </div>
+  {/if}
+
+  {#if change.record.group}
+    <p class="group" title="The reason given for the whole set of changes">
+      <b>Set:</b>
+      {change.record.group.reason}
+    </p>
   {/if}
 
   {#if linked.length > 0}
@@ -325,6 +335,12 @@
     flex-direction: column;
     gap: 4px;
     margin-top: 6px;
+  }
+  .group {
+    margin: 6px 0 0;
+    font-size: 11px;
+    color: var(--fg-muted);
+    word-break: break-word;
   }
   .saved-tags {
     margin: 0;

@@ -197,8 +197,9 @@ export async function loadDoc(id: string): Promise<Loaded | undefined> {
 export type AppendResult = { snapshotted: boolean };
 
 /**
- * Appends ops (already applied in `doc`) and refreshes the header. Takes a snapshot when due.
- * `doc.ops` must already contain the new ops at the end.
+ * Writes the last `newOps.length` ops of `doc` (already applied) and refreshes the header. The
+ * first of them may replace a stored op: a typing run grows its op in place. Takes a snapshot
+ * when due, and always when a replaced op was inside the previous snapshot.
  */
 export async function appendOps(
   doc: Document,
@@ -219,6 +220,7 @@ export async function appendOps(
   const due =
     opts.forceSnapshot ||
     !prevSnap ||
+    (newOps.length > 0 && firstSeq < prevSnap.opCount) ||
     doc.ops.length - prevSnap.opCount >= SNAPSHOT_EVERY_OPS ||
     Date.parse(now) - Date.parse(prevSnap.at) >= SNAPSHOT_EVERY_MS;
   const header = headerOf(doc, doc.ops.length, now);

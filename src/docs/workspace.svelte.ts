@@ -19,6 +19,8 @@ import {
 } from '../persist/idb';
 import { FolderSync, type External } from '../folder/sync';
 import { folderSupported, permissionOf, pickFolder, type DirHandleLike } from '../folder/fs';
+import { reviveHandle, sameNativeFolder, storableHandle } from '../folder/native';
+import { appBridge } from '../app/bridge';
 import { cleanToRevision, editsToMatch, type OpBuilder } from '../folder/merge';
 import {
   baseGuideTemplate,
@@ -29,6 +31,7 @@ import {
   resolvePrinciples,
   type ResolvedPrinciple,
 } from '../guides/principles';
+import { numbered, readSeed, seedAdditions, seedPrefix, type SeedFile } from '../guides/seed';
 import { docStats } from '../library/stats';
 import { changeRecords, toJsonl, type RecordOptions } from '../library/records';
 import type { DocMeta, MetaPatch } from '../model/types';
@@ -38,10 +41,18 @@ import { downloadBlob, downloadText, slugify } from '../export/download';
 import { printDocument, printHtml } from '../export/print';
 import { createAutosave, type SaveStatus } from '../persist/autosave';
 import { displayTitle } from './title';
-import { authorColor, DISK_AUTHOR } from './identity';
+import { authorColor, CLAUDE_AUTHOR, DISK_AUTHOR } from './identity';
+import {
+  parseProposals,
+  placeProposals,
+  proposalOps,
+  ProposalError,
+  type Proposal,
+} from '../folder/proposals';
 import { nowIso, isoAt } from '../util/time';
-import type { Author, Document, Op } from '../model/types';
+import type { Author, Document, Op, State } from '../model/types';
 import { appendOp, revisionText } from '../model/apply';
+import { composeSplices, extendEdit, type EditOp } from '../model/coalesce';
 import {
   absoluteToPos,
   commentRanges,
@@ -60,6 +71,10 @@ import {
 import { ulid } from '../model/ids';
 import type { EditorBridge, Selection, Transaction } from '../editor/createEditor';
 import { bufferChangesFor } from '../editor/sync';
+
+/** Same op log: same length and the very same last op (a typing run replaces its op in place). */
+const sameLog = (a: Document, b: Document) =>
+  a.ops.length === b.ops.length && a.ops[a.ops.length - 1] === b.ops[b.ops.length - 1];
 
 const LAST_DOC_KEY = 'shoulder-md:lastDoc';
 const UNDO_GROUP_MS = 500;
@@ -93,7 +108,8 @@ A Markdown editor with Word-style **tracked changes**. Underneath, every edit is
 > Comments, exports, and the edits library arrive in the next phases. See plan.md in the repo.
 `;
 
-type SaveBatch = { doc: Document; ops: Op[]; force: boolean };
+/** `from` is the index of the first op in `doc.ops` that still has to be written. */
+type SaveBatch = { doc: Document; from: number; force: boolean };
 
 type UndoEntry = {
   /** Applied in order, each valid in the state the previous one leaves. */
@@ -128,6 +144,8 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
   let bridge: EditorBridge | undefined;
   let undoStack: UndoEntry[] = [];
   let redoStack: UndoEntry[] = [];
+  /** The op a run of typing is growing, and the state before it (see model/coalesce.ts). */
+  let typingRun: { op: EditOp; base: State } | undefined;
   let canUndo = $state(false);
   let canRedo = $state(false);
 
@@ -168,8 +186,8 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
   );
 
   const autosave = createAutosave<SaveBatch>({
-    save: async ({ doc, ops, force }) => {
-      await appendOps(doc, ops, { forceSnapshot: force });
+    save: async ({ doc, from, force }) => {
+      await appendOps(doc, doc.ops.slice(from), { forceSnapshot: force });
       lastSavedAt = Date.now();
       if (syncs.shared || syncs.private) folderWriter.schedule({ doc, force: false });
       docs = docs
@@ -180,7 +198,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
         )
         .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
     },
-    merge: (a, b) => ({ doc: b.doc, ops: [...a.ops, ...b.ops], force: a.force || b.force }),
+    merge: (a, b) => ({ doc: b.doc, from: Math.min(a.from, b.from), force: a.force || b.force }),
     onStatus: (s) => {
       saveStatus = s;
       saveError = s === 'error' ? String(autosave.lastError) : undefined;
@@ -211,7 +229,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
   /** Flush pending ops and write a snapshot of the open document before leaving it. */
   async function park() {
     if (!current) return;
-    autosave.schedule({ doc: current, ops: [], force: true });
+    autosave.schedule({ doc: current, from: current.ops.length, force: true });
     await autosave.flush();
     await folderWriter.flush();
   }
@@ -231,6 +249,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     safeSet(LAST_DOC_KEY, id);
     pushMarks();
     if (external && external.docId !== id) external = undefined;
+    if (proposalOffer && proposalOffer.docId !== id) proposalOffer = undefined;
     void poll();
   }
 
@@ -302,10 +321,12 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     return { op: r.op, inverse: r.inverse };
   }
 
-  function schedule(ops: Op[], ts: string) {
+  /** Queues a save of the last `ops.length` ops; `rewritten` more before them changed in place. */
+  function schedule(ops: Op[], ts: string, rewritten = 0) {
     if (!current) return;
     current = { ...current, updatedAt: ts };
-    autosave.schedule({ doc: current, ops, force: false });
+    const from = current.ops.length - ops.length - rewritten;
+    autosave.schedule({ doc: current, from, force: false });
   }
 
   /**
@@ -342,10 +363,15 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       last.changeId === entry.changeId &&
       entry.at - last.at < UNDO_GROUP_MS
     ) {
-      // Same keystroke run: fold into the previous entry (new inverse runs first).
+      // Same keystroke run: fold into the previous entry (new inverse runs first), as one
+      // splice where possible so undoing a run logs one op rather than one per keystroke.
+      const one =
+        entry.ops.length === 1 && last.ops.length === 1
+          ? composeSplices(entry.ops[0]!, last.ops[0]!)
+          : undefined;
       undoStack[undoStack.length - 1] = {
         ...last,
-        ops: [...entry.ops, ...last.ops],
+        ops: one ? [one] : [...entry.ops, ...last.ops],
         after: entry.after,
         at: entry.at,
       };
@@ -403,6 +429,11 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     const before = bridge?.getSelection() ?? { anchor: 0, head: 0 };
     const newOps: Op[] = [];
     const inverses: Op[][] = [];
+    const stateBefore = current.state;
+    const run =
+      coalesce && typingRun?.op === current.ops[current.ops.length - 1] ? typingRun : undefined;
+    typingRun = undefined;
+    let rewritten = 0;
     // Later changes first, so earlier offsets stay valid in the pre-transaction coordinates.
     for (const ch of [...tr.changes].reverse()) {
       const op: Op = {
@@ -432,6 +463,29 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       redoStack = [];
       canUndo = canRedo = false;
     } else {
+      const own = newOps[0];
+      if (single && own?.type === 'edit') {
+        // Fold the keystroke into the run's op when that gives the same document, so the log
+        // grows by edits rather than by characters.
+        const folded =
+          run &&
+          extendEdit(
+            run.base,
+            run.op,
+            { insert: single.insert, cut: single.to - single.from },
+            current.state,
+            own.alloc,
+          );
+        if (folded && run) {
+          const op = folded.op as EditOp;
+          current = { ...current, ops: [...current.ops.slice(0, -2), op], state: folded.state };
+          typingRun = { op, base: run.base };
+          newOps.length = 0;
+          rewritten = 1;
+        } else {
+          typingRun = { op: own, base: stateBefore };
+        }
+      }
       recordUndo({
         ops: inverses.reverse().flat(),
         before,
@@ -447,7 +501,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       ? { changeId, author: author.id, endOffset: single.from + single.insert.length, at, tracked }
       : undefined;
     text = tr.text;
-    schedule(newOps, ts);
+    schedule(newOps, ts, rewritten);
     pushMarks();
   }
 
@@ -493,6 +547,40 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     if (reasonTags && reasonTags.length) op.reasonTags = reasonTags;
     const r = push(op);
     schedule([r.op], ts);
+  }
+
+  /**
+   * Gives every pending change one shared reason (or clears it). The changes keep their own
+   * reasons; an existing group id is reused so rewording does not start a new group.
+   */
+  function setGroupReason(reason: string | undefined) {
+    if (!current || pending.length === 0) return;
+    const text = reason?.trim() || undefined;
+    const existing = pending.find((c) => c.record.group)?.record.group;
+    if (!text && !existing) return;
+    if (text && pending.every((c) => c.record.group?.reason === text)) return;
+    const ts = nowIso();
+    const op: Op = {
+      id: ulid(),
+      type: 'set_group_reason',
+      author: author.id,
+      ts,
+      groupId: existing?.id ?? ulid(),
+      changeIds: pending.map((c) => c.id),
+    };
+    if (text) op.reason = text;
+    const r = push(op);
+    schedule([r.op], ts);
+  }
+
+  /** Decides every pending change; a shared reason first extends to changes made after it. */
+  function decideAll(type: 'accept' | 'reject') {
+    if (!current || view !== 'revision') return;
+    setGroupReason(pending.find((c) => c.record.group)?.record.group?.reason);
+    decide(
+      type,
+      pending.map((c) => c.id),
+    );
   }
 
   /** Starts composing a comment on the current selection (or the word at the cursor). */
@@ -704,6 +792,12 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
   });
   let external = $state.raw<ExternalChange | undefined>(undefined);
   let folderNotice = $state<string | undefined>(undefined);
+  /** Proposed edits from Claude Code waiting next to the open document (folder/proposals.ts). */
+  let proposalOffer = $state.raw<
+    { docId: string; file: string; key: string; proposals: Proposal[] } | undefined
+  >(undefined);
+  /** The proposals file last dealt with, so it is not offered or reported twice. */
+  let proposalsSeen = '';
   const syncs: Record<FolderKind, FolderSync | undefined> = {
     shared: undefined,
     private: undefined,
@@ -769,10 +863,11 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       const r = await target.write(doc, { force });
       // Ask only if the browser has not moved on since this copy was queued. If it has, a newer
       // write is on its way and will apply the rule: the browser wins, the disk copy is kept.
-      const movedOn =
-        !current || current.ops.length !== doc.ops.length || autosave.status !== 'saved';
+      const movedOn = !current || !sameLog(current, doc) || autosave.status !== 'saved';
       if (r.external && doc.id === current?.id && !movedOn)
         external = { docId: doc.id, ext: r.external };
+      if (r.renamed)
+        folderNotice = `${r.renamed.from} was renamed ${r.renamed.to} in the folder, now that the document has a title.`;
       if (r.backups.length) {
         folderNotice = `The copy on disk had changed too, so it was saved as ${r.backups.join(' and ')} before your version was written.`;
       }
@@ -825,20 +920,26 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     }
   }
 
+  /** The remembered folder of a kind, with its handle ready to use (a stored path is revived). */
+  async function storedRoot(kind: FolderKind) {
+    const root = await getFolderRoot(kind);
+    return root && { ...root, handle: reviveHandle(root.handle, appBridge()?.fs) };
+  }
+
   /** On startup: use remembered folders the browser still allows, else offer to reconnect. */
   async function restoreFolders(): Promise<void> {
     for (const kind of ['shared', 'private'] as const) {
       if (folders[kind].status === 'unsupported') continue;
-      const root = await getFolderRoot(kind);
-      if (!root) continue;
       try {
+        const root = await storedRoot(kind);
+        if (!root) continue;
         const perm = await permissionOf(root.handle);
         if (perm === 'granted') await activate(kind, root.handle);
         else setFolder(kind, { status: 'needs-permission', name: root.name });
       } catch (e) {
         setFolder(kind, {
           status: 'error',
-          name: root.name,
+          name: folderName(kind) ?? 'the folder',
           error: e instanceof Error ? e.message : String(e),
         });
       }
@@ -855,7 +956,13 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       folderNotice = `Could not open the folder: ${e instanceof Error ? e.message : String(e)}`;
       return;
     }
-    const otherRoot = await getFolderRoot(kind === 'shared' ? 'private' : 'shared');
+    const otherRoot = await storedRoot(kind === 'shared' ? 'private' : 'shared').catch(
+      () => undefined,
+    );
+    if (otherRoot && sameNativeFolder(otherRoot.handle, handle)) {
+      folderNotice = 'The shared and private folders must be different folders.';
+      return;
+    }
     if (otherRoot && 'isSameEntry' in otherRoot.handle) {
       const same = await (
         otherRoot.handle as unknown as { isSameEntry(h: unknown): Promise<boolean> }
@@ -867,22 +974,26 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     }
     syncs[kind] = undefined;
     await clearFolderRecords(kind);
-    await setFolderRoot({ handle, name: handle.name, connectedAt: nowIso() }, kind);
+    await setFolderRoot(
+      { handle: storableHandle(handle) as DirHandleLike, name: handle.name, connectedAt: nowIso() },
+      kind,
+    );
     await activate(kind, handle);
   }
 
   /** Asks the browser for permission again (needs a click) and resumes syncing. */
   async function reconnectFolder(kind: FolderKind = 'shared'): Promise<void> {
-    const root = await getFolderRoot(kind);
-    if (!root) return void setFolder(kind, { status: 'none' });
+    const stored = await getFolderRoot(kind);
+    if (!stored) return void setFolder(kind, { status: 'none' });
     try {
-      const perm = await permissionOf(root.handle, true);
-      if (perm === 'granted') await activate(kind, root.handle);
-      else setFolder(kind, { status: 'needs-permission', name: root.name });
+      const handle = reviveHandle(stored.handle, appBridge()?.fs);
+      const perm = await permissionOf(handle, true);
+      if (perm === 'granted') await activate(kind, handle);
+      else setFolder(kind, { status: 'needs-permission', name: stored.name });
     } catch (e) {
       setFolder(kind, {
         status: 'error',
-        name: root.name,
+        name: stored.name,
         error: e instanceof Error ? e.message : String(e),
       });
     }
@@ -926,13 +1037,99 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     polling = true;
     try {
       const ext = await sync.check(doc);
-      if (current?.id !== doc.id || current.ops.length !== doc.ops.length) return;
+      if (current?.id !== doc.id || !sameLog(current, doc)) return;
       if (ext.kind === 'missing') folderWriter.schedule({ doc, force: false });
       else if (ext.kind !== 'none') external = { docId: doc.id, ext };
+      // Claude Code only works in the shared folder, so proposals are only looked for there.
+      else if (kind === 'shared') await checkProposals(sync, doc);
     } catch (e) {
       folderFailed(kind, e);
     } finally {
       polling = false;
+    }
+  }
+
+  async function checkProposals(sync: FolderSync, doc: Document): Promise<void> {
+    const found = await sync.proposals(doc.id);
+    if (current?.id !== doc.id) return;
+    if (!found) {
+      if (proposalOffer?.docId === doc.id) proposalOffer = undefined;
+      return;
+    }
+    if (found.key === proposalOffer?.key || found.key === proposalsSeen) return;
+    try {
+      const file = parseProposals(found.text);
+      if (file.document && file.document !== doc.id)
+        throw new ProposalError('it was written for another document');
+      if (file.proposals.length === 0) throw new ProposalError('it has no proposals in it');
+      proposalOffer = {
+        docId: doc.id,
+        file: found.file,
+        key: found.key,
+        proposals: file.proposals,
+      };
+    } catch (e) {
+      proposalsSeen = found.key;
+      proposalOffer = undefined;
+      folderNotice = `${found.file} could not be used: ${e instanceof Error ? e.message : String(e)}.`;
+    }
+  }
+
+  /**
+   * Turns the waiting proposals into tracked changes by Claude, each with its reason and
+   * principle links, as one undo step. Proposals whose quoted text cannot be found exactly
+   * once are kept in a `.proposals.skipped.json` file; the proposals file itself is removed.
+   */
+  async function applyProposals(): Promise<void> {
+    const offer = proposalOffer;
+    if (!offer || !current || current.id !== offer.docId) return;
+    proposalOffer = undefined;
+    proposalsSeen = offer.key;
+    const { placed, skipped } = placeProposals(viewText(current.state, 'clean'), offer.proposals);
+    if (placed.length > 0) {
+      if (view !== 'revision') setView('revision');
+      const sel = bridge?.getSelection() ?? { anchor: 0, head: 0 };
+      const inverse = applyModelOps(
+        proposalOps(placed, {
+          author: CLAUDE_AUTHOR,
+          ts: nowIso(),
+          id: ulid,
+          known: principles.map((p) => p.id),
+        }),
+      );
+      recordUndo({
+        ops: inverse,
+        before: sel,
+        after: bridge?.getSelection() ?? sel,
+        at: Date.now(),
+      });
+      await autosave.flush();
+    }
+    const leftover = skipped.map((s) => ({ ...s.proposal, skipped: s.why }));
+    try {
+      await syncs.shared?.clearProposals(
+        offer.docId,
+        leftover.length ? JSON.stringify({ proposals: leftover }, null, 2) + '\n' : undefined,
+      );
+    } catch (e) {
+      folderFailed('shared', e);
+    }
+    const n = placed.length;
+    const added = `Added ${n} proposed ${n === 1 ? 'edit' : 'edits'} by Claude as tracked changes.`;
+    folderNotice = skipped.length
+      ? `${added} ${skipped.length} could not be placed (the quoted text was missing, repeated, or overlapped another edit) and ${skipped.length === 1 ? 'was' : 'were'} kept in ${offer.file.replace('.proposals.json', '.proposals.skipped.json')}.`
+      : added;
+  }
+
+  async function discardProposals(): Promise<void> {
+    const offer = proposalOffer;
+    if (!offer) return;
+    proposalOffer = undefined;
+    proposalsSeen = offer.key;
+    try {
+      await syncs.shared?.clearProposals(offer.docId);
+    } catch (e) {
+      folderFailed('shared', e);
     }
   }
 
@@ -1045,6 +1242,95 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     await refreshList();
     await open(doc.id);
     return doc.id;
+  }
+
+  /** Adds `insert` at the end of a guide, open or stored, as an untracked edit. */
+  async function appendToGuide(id: string, insert: string): Promise<void> {
+    const build = (state: State): Op => {
+      const end = absoluteToPos(state, revisionText(state).length);
+      return {
+        id: ulid(),
+        type: 'edit',
+        author: author.id,
+        ts: nowIso(),
+        changeId: ulid(),
+        from: end,
+        to: end,
+        insert,
+        tracked: false,
+      };
+    };
+    if (current?.id === id) {
+      const sel = bridge?.getSelection() ?? { anchor: 0, head: 0 };
+      const inverse = applyModelOps([build(current.state)], sel);
+      recordUndo({ ops: inverse, before: sel, after: sel, at: Date.now() });
+      return;
+    }
+    const loaded = await loadDoc(id);
+    if (loaded) await appendToStored(id, build(loaded.doc.state));
+  }
+
+  /**
+   * Creates or tops up style guides from a seed folder (see guides/seed.ts) and says what it
+   * did. Existing principles are never changed.
+   */
+  async function importSeed(files: SeedFile[]): Promise<string> {
+    const guides = readSeed(files);
+    if (guides.length === 0)
+      return 'No style guides found. Expected base.md and one folder per genre holding guide.md.';
+    await park();
+    const report: string[] = [];
+    for (const g of guides) {
+      const wanted = seedPrefix(g.text);
+      const existing =
+        g.role === 'base'
+          ? baseGuide
+          : genres.find(
+              (d) =>
+                d.title.trim().toLowerCase() === g.name.trim().toLowerCase() ||
+                (wanted !== undefined && d.guide?.prefix === wanted),
+            );
+      if (existing) {
+        const state =
+          current?.id === existing.id ? current.state : (await loadDoc(existing.id))?.doc.state;
+        if (!state) continue;
+        const { append, added } = seedAdditions(
+          revisionText(state),
+          g.text,
+          existing.guide!.prefix,
+        );
+        if (added > 0) await appendToGuide(existing.id, append);
+        report.push(
+          added > 0
+            ? `Added ${added} ${added === 1 ? 'principle' : 'principles'} to “${existing.title}”.`
+            : `“${existing.title}” already has everything in ${g.path}.`,
+        );
+        continue;
+      }
+      const taken = ['B', ...genres.map((d) => d.guide!.prefix)];
+      const prefix =
+        g.role === 'base'
+          ? 'B'
+          : wanted && !taken.includes(wanted)
+            ? wanted
+            : genrePrefix(g.name, taken);
+      const text = numbered(g.text, prefix);
+      await createDoc({
+        text,
+        author: author.id,
+        tracking: false,
+        ...(g.role === 'genre' ? { title: g.name } : {}),
+        meta: {
+          guide: g.role === 'base' ? { role: 'base', prefix } : { role: 'genre', prefix },
+        },
+      });
+      const n = parsePrinciples(text).principles.length;
+      report.push(`Created “${g.name}” with ${n} ${n === 1 ? 'principle' : 'principles'}.`);
+      await refreshList();
+    }
+    await refreshList();
+    if (syncs.shared || syncs.private) await writeAll();
+    return report.join(' ');
   }
 
   type Confirm = (message: string) => boolean;
@@ -1374,6 +1660,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     },
     claudeAllowed,
     openBaseGuide,
+    importSeed,
     createGenre,
     setClaude,
     setGenre,
@@ -1386,6 +1673,11 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     get external() {
       return external;
     },
+    get proposalOffer() {
+      return proposalOffer;
+    },
+    applyProposals,
+    discardProposals,
     get folderNotice() {
       return folderNotice;
     },
@@ -1461,16 +1753,9 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     toggleTracking: () => setTracking(!trackingOn),
     accept: (ids: string[]) => decide('accept', ids),
     reject: (ids: string[]) => decide('reject', ids),
-    acceptAll: () =>
-      decide(
-        'accept',
-        pending.map((c) => c.id),
-      ),
-    rejectAll: () =>
-      decide(
-        'reject',
-        pending.map((c) => c.id),
-      ),
+    acceptAll: () => decideAll('accept'),
+    rejectAll: () => decideAll('reject'),
+    setGroupReason,
     acceptActive: () => activeChangeId && decide('accept', [activeChangeId]),
     rejectActive: () => activeChangeId && decide('reject', [activeChangeId]),
     setReason,

@@ -7,8 +7,9 @@
  * not, in which case the caller asks the user. When both changed, the disk version is saved
  * next to the document as `<name>.conflict-<time>.md|.shoulder.json` before it is overwritten.
  */
-import type { Document } from '../model/types';
+import type { Document, Op } from '../model/types';
 import { exportJson, importJson } from '../export/json';
+import { PROPOSALS_EXT, SKIPPED_EXT } from './proposals';
 import { slugify } from '../export/download';
 import { displayTitle } from '../docs/title';
 import { text as viewText } from '../model/views';
@@ -24,6 +25,8 @@ export type FileRecord = {
   json?: Stat;
   /** How many ops the document had when it was last written. */
   opCount: number;
+  /** The document's `updatedAt` when last written; a typing run grows its op without adding one. */
+  stamp?: string;
   writtenAt?: string;
 };
 
@@ -47,6 +50,8 @@ export type WriteResult = {
   external?: Exclude<External, { kind: 'none' } | { kind: 'missing' }>;
   /** Files the disk version was saved to before being overwritten. */
   backups: string[];
+  /** Set when files named while the document was untitled were renamed after its title. */
+  renamed?: { from: string; to: string };
 };
 
 const MD = '.md';
@@ -55,6 +60,13 @@ const JSON_EXT = '.shoulder.json';
 const statOf = (f: FileLike): Stat => ({ lastModified: f.lastModified, size: f.size });
 const same = (a: Stat | undefined, b: Stat) =>
   !!a && a.lastModified === b.lastModified && a.size === b.size;
+
+/** Same op, not just the same id: a typing run keeps its id while its text grows. */
+const sameOp = (a: Op | undefined, b: Op) =>
+  !!a && a.id === b.id && (a.type !== 'edit' || b.type !== 'edit' || a.insert === b.insert);
+
+/** Names given to a document that had no title yet. */
+const PLACEHOLDER = /^untitled(-\d+)?$/;
 
 export function stamp(d = new Date()): string {
   const p = (n: number) => String(n).padStart(2, '0');
@@ -76,6 +88,13 @@ export class FolderSync {
   async recordFor(doc: Document): Promise<FileRecord> {
     const existing = await this.store.get(doc.id);
     if (existing) return existing;
+    const record: FileRecord = { docId: doc.id, base: await this.freeBase(doc), opCount: -1 };
+    await this.store.put(record);
+    return record;
+  }
+
+  /** A file name stem for the document, from its title, that no other document is using. */
+  private async freeBase(doc: Document): Promise<string> {
     const taken = new Set(await listFileNames(this.dir));
     const used = new Set((await this.store.all()).map((r) => r.base));
     const stem = slugify(displayTitle(doc.state.meta.title, viewText(doc.state, 'clean')));
@@ -90,9 +109,33 @@ export class FolderSync {
         break;
       base = `${stem}-${i}`;
     }
-    const record: FileRecord = { docId: doc.id, base, opCount: -1 };
-    await this.store.put(record);
-    return record;
+    return base;
+  }
+
+  /**
+   * A better name for a document whose files were named while it was still untitled. File
+   * names are otherwise fixed once chosen (later title changes do not rename), but "untitled"
+   * only says the folder was connected early. The title counts as settled once it is set
+   * explicitly, or once the text has moved past its first line.
+   */
+  private async settledName(doc: Document, rec: FileRecord): Promise<string | undefined> {
+    if (!PLACEHOLDER.test(rec.base)) return undefined;
+    const clean = viewText(doc.state, 'clean');
+    const explicit = doc.state.meta.title.trim();
+    if (!explicit && !/\S[^\n]*\n/.test(clean)) return undefined;
+    if (PLACEHOLDER.test(slugify(displayTitle(explicit, clean)))) return undefined;
+    return this.freeBase(doc);
+  }
+
+  /** Removes a renamed document's old files, carrying any waiting proposals to the new name. */
+  private async retire(oldBase: string, newBase: string): Promise<void> {
+    for (const ext of [PROPOSALS_EXT, SKIPPED_EXT]) {
+      const h = await fileIfExists(this.dir, oldBase + ext);
+      if (h) await writeFile(this.dir, newBase + ext, await (await h.getFile()).text());
+    }
+    for (const ext of [MD, JSON_EXT, PROPOSALS_EXT, SKIPPED_EXT]) {
+      if (await fileIfExists(this.dir, oldBase + ext)) await this.dir.removeEntry(oldBase + ext);
+    }
   }
 
   private async jsonId(name: string): Promise<string | undefined> {
@@ -127,7 +170,7 @@ export class FolderSync {
           return { kind: 'invalid', file: jsonName, error: 'it belongs to another document' };
         const local = doc.ops;
         const extendsLocal =
-          disk.ops.length >= local.length && local.every((op, i) => disk.ops[i]?.id === op.id);
+          disk.ops.length >= local.length && local.every((op, i) => sameOp(disk.ops[i], op));
         if (extendsLocal && disk.ops.length === local.length) {
           // Rewritten with the same history (e.g. touched or reformatted): not a change.
           if (!mdChanged) return { kind: 'none' };
@@ -163,29 +206,40 @@ export class FolderSync {
   async write(doc: Document, opts: { force?: boolean } = {}): Promise<WriteResult> {
     const rec = await this.recordFor(doc);
     const external = await this.check(doc, rec);
-    const browserChanged = rec.opCount !== doc.ops.length;
+    const browserChanged =
+      rec.opCount !== doc.ops.length || (rec.stamp !== undefined && rec.stamp !== doc.updatedAt);
     const backups: string[] = [];
+    // Only rename when nothing outside is waiting to be settled under the old name.
+    const renameTo =
+      external.kind === 'none' || external.kind === 'missing'
+        ? await this.settledName(doc, rec)
+        : undefined;
 
     if (external.kind === 'md' || external.kind === 'json' || external.kind === 'invalid') {
       if (!browserChanged && !opts.force) return { written: false, external, backups };
       backups.push(...(await this.backup(rec)));
-    } else if (!browserChanged && external.kind === 'none' && !opts.force) {
+    } else if (!browserChanged && external.kind === 'none' && !opts.force && !renameTo) {
       return { written: false, backups };
-    } else if (rec.opCount < 0) {
+    } else if (rec.opCount < 0 && !renameTo) {
       // First write to this name: keep anything already there that differs from what we write.
       backups.push(...(await this.backupIfDifferent(rec, doc)));
     }
 
-    const md = await writeFile(this.dir, rec.base + MD, viewText(doc.state, 'clean'));
-    const json = await writeFile(this.dir, rec.base + JSON_EXT, exportJson(doc));
+    const base = renameTo ?? rec.base;
+    const md = await writeFile(this.dir, base + MD, viewText(doc.state, 'clean'));
+    const json = await writeFile(this.dir, base + JSON_EXT, exportJson(doc));
     await this.store.put({
       ...rec,
+      base,
       md: statOf(md),
       json: statOf(json),
       opCount: doc.ops.length,
+      stamp: doc.updatedAt,
       writtenAt: this.now().toISOString(),
     });
-    return { written: true, backups };
+    if (!renameTo) return { written: true, backups };
+    await this.retire(rec.base, renameTo);
+    return { written: true, backups, renamed: { from: rec.base + MD, to: renameTo + MD } };
   }
 
   private async backup(rec: FileRecord): Promise<string[]> {
@@ -250,6 +304,29 @@ export class FolderSync {
     }
     await this.store.delete(docId);
     return removed;
+  }
+
+  /**
+   * The proposals file waiting next to a document, if any. `key` changes when the file does,
+   * so a caller can tell a file it has already looked at from a new one.
+   */
+  async proposals(docId: string): Promise<{ file: string; text: string; key: string } | undefined> {
+    const rec = await this.store.get(docId);
+    if (!rec) return undefined;
+    const file = rec.base + PROPOSALS_EXT;
+    const handle = await fileIfExists(this.dir, file);
+    if (!handle) return undefined;
+    const f = await handle.getFile();
+    return { file, text: await f.text(), key: `${docId}:${f.lastModified}:${f.size}` };
+  }
+
+  /** Removes a document's proposals file once handled, keeping `leftover` beside it if given. */
+  async clearProposals(docId: string, leftover?: string): Promise<void> {
+    const rec = await this.store.get(docId);
+    if (!rec) return;
+    if (leftover !== undefined) await writeFile(this.dir, rec.base + SKIPPED_EXT, leftover);
+    if (await fileIfExists(this.dir, rec.base + PROPOSALS_EXT))
+      await this.dir.removeEntry(rec.base + PROPOSALS_EXT);
   }
 
   /** Whether this folder holds (or last held) the document's files. */

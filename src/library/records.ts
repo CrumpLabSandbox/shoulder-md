@@ -38,6 +38,9 @@ export type ChangeRow = {
   contextAfter: string;
   reason?: string;
   reasonTags: string[];
+  /** A reason given once for a set of changes; rows sharing a `groupId` were explained together. */
+  groupId?: string;
+  groupReason?: string;
   /** Style guide principles linked to this change, with their current text where known. */
   principles: { id: string; text?: string }[];
   /** The document's genre, by name. */
@@ -202,6 +205,7 @@ export function changeRecords(doc: Document, opts: RecordOptions = {}): ChangeRo
       after,
       ...(rec.reason ? { reason: rec.reason } : {}),
       reasonTags: rec.reasonTags ?? [],
+      ...(rec.group ? { groupId: rec.group.id, groupReason: rec.group.reason } : {}),
       principles: (rec.principles ?? []).map((id) => {
         const text = opts.principleTexts?.[id];
         return text !== undefined ? { id, text } : { id };

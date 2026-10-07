@@ -4,6 +4,7 @@ export * from './segment';
 export * from './views';
 export * from './changes';
 export * from './hash';
+export * from './coalesce';
 export {
   applyOp,
   replay,

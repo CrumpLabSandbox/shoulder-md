@@ -27,6 +27,10 @@ export default ts.config(
     },
   },
   {
-    ignores: ['dist/', 'node_modules/', '.svelte-kit/'],
+    files: ['electron/**/*.cjs'],
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
+  },
+  {
+    ignores: ['dist/', 'release/', 'node_modules/', '.svelte-kit/'],
   },
 );

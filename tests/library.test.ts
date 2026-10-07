@@ -4,6 +4,24 @@ import { changeRecords, toJsonl, captureChange } from '../src/library/records';
 import { docStats } from '../src/library/stats';
 import { createDocument } from '../src/model/apply';
 
+describe('group reasons in the dataset', () => {
+  it('puts the shared reason and group id on each row and counts the changes as reasoned', () => {
+    const h = harness('One two. Three four.');
+    h.edit(0, 3, 'A', { changeId: 'c1' });
+    const at = h.rev().indexOf('four');
+    h.edit(at, at + 4, 'five', { changeId: 'c2' });
+    h.op({ type: 'set_reason', changeId: 'c1', reason: 'shorter' });
+    h.op({ type: 'set_group_reason', groupId: 'g1', changeIds: ['c1', 'c2'], reason: 'tighten' });
+    h.accept('c1');
+    h.accept('c2');
+    const rows = changeRecords(h.doc, {});
+    expect(rows[0]).toMatchObject({ reason: 'shorter', groupId: 'g1', groupReason: 'tighten' });
+    expect(rows[1]).toMatchObject({ groupId: 'g1', groupReason: 'tighten' });
+    expect(rows[1]!.reason).toBeUndefined();
+    expect(docStats(h.state).reasoned).toBe(2);
+  });
+});
+
 describe('changeRecords', () => {
   it('captures decided changes with sentence, neighbours, reason, discussion, and outcome', () => {
     const h = harness('# Results\n\nWe ran it. The results was significant. Then we stopped.');

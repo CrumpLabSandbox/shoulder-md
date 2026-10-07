@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { appBridge } from '../app/bridge';
+  import { inTextField, runMenuCommand, type MenuActions } from '../app/commands';
   import { onMount } from 'svelte';
   import { createSettingsStore, type Layout } from '../settings/settings.svelte';
   import { createWorkspace } from '../docs/workspace.svelte';
@@ -51,6 +53,7 @@
     void ws.threads;
     void ws.draft;
     void settings.value.showReasonTags;
+    void settings.value.showReasonField;
     void layout;
     void showMargin;
     requestAnimationFrame(() => tick++);
@@ -105,6 +108,47 @@
     }
   }
 
+  /** What each menu command of the Mac app does (see app/commands.ts). */
+  const menuActions: MenuActions = {
+    settings: () => (settingsOpen = !settingsOpen),
+    new: () => void ws.create(),
+    import: () => importInput?.click(),
+    documents: () => (docsOpen = !docsOpen),
+    library: () => (libraryOpen = !libraryOpen),
+    save: () => void ws.flush(),
+    folder: () => void ws.connectFolder(),
+    'export:md-clean': () => void ws.exportAs('md-clean'),
+    'export:md-original': () => void ws.exportAs('md-original'),
+    'export:md-critic': () => void ws.exportAs('md-critic'),
+    'export:docx': () => void ws.exportAs('docx'),
+    'export:json': () => void ws.exportAs('json'),
+    'export:print-clean': () => void ws.exportAs('print-clean'),
+    'export:print-markup': () => void ws.exportAs('print-markup'),
+    // In a text field (a title, a reason) Undo belongs to the field, as it does in a browser.
+    undo: () => (inTextField(document.activeElement) ? document.execCommand('undo') : ws.undo()),
+    redo: () => (inTextField(document.activeElement) ? document.execCommand('redo') : ws.redo()),
+    'view:revision': () => ws.setView('revision'),
+    'view:clean': () => ws.setView('clean'),
+    'view:original': () => ws.setView('original'),
+    'layout:editor': () => setLayout('editor'),
+    'layout:split': () => setLayout(layout === 'split' ? 'editor' : 'split'),
+    'layout:preview': () => setLayout(layout === 'preview' ? 'editor' : 'preview'),
+    margin: () => (marginOpen = !marginOpen),
+    tracking: () => ws.toggleTracking(),
+    accept: () => void ws.acceptActive(),
+    reject: () => void ws.rejectActive(),
+    next: () => ws.nextChange(),
+    previous: () => ws.prevChange(),
+    'accept-all': () => ws.acceptAll(),
+    'reject-all': () => ws.rejectAll(),
+    reason: () => focusReason(),
+    comment: () => {
+      marginOpen = true;
+      ws.startComment();
+    },
+  };
+  let importInput: HTMLInputElement | undefined = $state();
+
   function focusReason() {
     const id = ws.activeChangeId;
     if (!id) return;
@@ -118,7 +162,9 @@
     const detach = attachFlushTriggers(() => ws.flush());
     const onResize = () => tick++;
     window.addEventListener('resize', onResize);
+    const stopMenu = appBridge()?.onMenu((command) => runMenuCommand(menuActions, command));
     return () => {
+      stopMenu?.();
       detach();
       window.removeEventListener('resize', onResize);
     };
@@ -126,6 +172,19 @@
 </script>
 
 <svelte:window onkeydown={onKeydown} />
+
+<!-- File > Import… in the Mac app; the Documents panel has its own button. -->
+<input
+  bind:this={importInput}
+  type="file"
+  accept=".md,.markdown,.txt,.json"
+  hidden
+  onchange={(e) => {
+    const f = e.currentTarget.files?.[0];
+    if (f) void ws.importFile(f);
+    e.currentTarget.value = '';
+  }}
+/>
 
 <div class="app">
   <Toolbar
@@ -222,6 +281,8 @@
         {tick}
         showTags={settings.value.showReasonTags}
         ontoggletags={(v) => settings.set('showReasonTags', v)}
+        showReason={settings.value.showReasonField}
+        ontogglereason={(v) => settings.set('showReasonField', v)}
       />
     {/if}
 
@@ -269,6 +330,22 @@
         <button onclick={() => void ws.resolveExternal('mine')}
           >{ext.kind === 'invalid' ? 'Overwrite with my version' : 'Keep my version'}</button
         >
+      </span>
+    </div>
+  {/if}
+
+  {#if ws.proposalOffer && !ws.external}
+    {@const n = ws.proposalOffer.proposals.length}
+    <div class="notice external" role="alert">
+      <span>
+        Claude proposed {n}
+        {n === 1 ? 'edit' : 'edits'} for this document (<b>{ws.proposalOffer.file}</b>).
+      </span>
+      <span class="actions">
+        <button class="primary" onclick={() => void ws.applyProposals()}
+          >Show as tracked changes</button
+        >
+        <button onclick={() => void ws.discardProposals()}>Discard</button>
       </span>
     </div>
   {/if}

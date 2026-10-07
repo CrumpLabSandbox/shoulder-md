@@ -173,6 +173,18 @@
             "type": "string"
           }
         },
+        "group": {
+          "type": "object",
+          "required": ["id", "reason"],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        },
         "decidedBy": {
           "type": "string"
         },
@@ -380,6 +392,7 @@
             "splice",
             "set_reason",
             "set_principles",
+            "set_group_reason",
             "comment_add",
             "comment_reply",
             "comment_edit",
@@ -449,6 +462,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "groupId": {
+          "type": "string"
         },
         "threadId": {
           "type": "string"

@@ -11,7 +11,7 @@ export type DocStats = {
   pendingChanges: number;
   acceptedChanges: number;
   rejectedChanges: number;
-  /** Tracked changes that carry a reason or reason tags. */
+  /** Tracked changes that carry a reason (their own or their group's) or reason tags. */
   reasoned: number;
   comments: number;
   status: DocMeta['status'];
@@ -39,7 +39,7 @@ export function docStats(state: State): DocStats {
     if (c.status === 'pending') pending += live.has(c.id) ? 1 : 0;
     else if (c.status === 'accepted') accepted++;
     else rejected++;
-    if (c.reason || (c.reasonTags?.length ?? 0) > 0) reasoned++;
+    if (c.reason || c.group || (c.reasonTags?.length ?? 0) > 0) reasoned++;
   }
   return {
     title: displayTitle(state.meta.title, clean),

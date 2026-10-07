@@ -277,6 +277,35 @@ describe('reasons and meta', () => {
   });
 });
 
+describe('group reasons', () => {
+  it('gives a set of changes one reason beside their own, and survives accept, undo and replay', () => {
+    const h = harness('One two. Three four.');
+    h.edit(0, 3, 'A', { changeId: 'c1' });
+    const at = h.rev().indexOf('four');
+    h.edit(at, at + 4, 'five', { changeId: 'c2' });
+    h.op({ type: 'set_reason', changeId: 'c1', reason: 'shorter' });
+    h.op({ type: 'set_group_reason', groupId: 'g1', changeIds: ['c1', 'c2'], reason: 'tighten' });
+    expect(h.state.changes['c1']).toMatchObject({
+      reason: 'shorter',
+      group: { id: 'g1', reason: 'tighten' },
+    });
+    expect(h.state.changes['c2']!.group).toEqual({ id: 'g1', reason: 'tighten' });
+
+    h.op({ type: 'accept', changeIds: ['c1', 'c2'] });
+    expect(h.state.changes['c2']).toMatchObject({ status: 'accepted', group: { id: 'g1' } });
+    h.applyOps(h.inverse);
+    expect(h.state.changes['c2']).toMatchObject({ status: 'pending', group: { id: 'g1' } });
+    expect(replay(h.doc.ops)).toEqual(h.state);
+
+    h.op({ type: 'set_group_reason', groupId: 'g1', changeIds: ['c2'] });
+    expect(h.state.changes['c2']!.group).toBeUndefined();
+    expect(h.state.changes['c1']!.group).toBeDefined();
+    expect(() =>
+      h.op({ type: 'set_group_reason', groupId: 'g2', changeIds: ['nope'], reason: 'x' }),
+    ).toThrow();
+  });
+});
+
 describe('replay', () => {
   it('reproduces the state, ids included, from the op log', () => {
     const h = harness('# T\n\nOne two. Three.\n\n- a\n- b\n');

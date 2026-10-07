@@ -59,6 +59,35 @@ export function parsePrinciples(text: string): ParsedGuide {
   return { principles, unnumbered };
 }
 
+export type PrincipleItem = {
+  id?: string;
+  text: string;
+  /** The whole list item as written: marker, id, and any indented lines under it. */
+  raw: string;
+};
+
+/** Every top-level list item of a guide, numbered or not, with its source text. */
+export function principleItems(text: string): PrincipleItem[] {
+  const tree = parser.parse(text);
+  const out: PrincipleItem[] = [];
+  const cursor = tree.cursor();
+  if (!cursor.firstChild()) return out;
+  do {
+    if (cursor.name !== 'BulletList' && cursor.name !== 'OrderedList') continue;
+    for (let item = cursor.node.firstChild; item; item = item.nextSibling) {
+      if (item.name !== 'ListItem') continue;
+      const body = item.getChild('Paragraph') ?? item.getChild('Task');
+      if (!body) continue;
+      const first = text.slice(body.from, body.to);
+      const m = ID.exec(first);
+      const rest = (m ? first.slice(m[0].length) : first).replace(/\s+/g, ' ').trim();
+      if (!rest) continue;
+      out.push({ ...(m ? { id: m[1]! } : {}), text: rest, raw: text.slice(item.from, item.to) });
+    }
+  } while (cursor.nextSibling());
+  return out;
+}
+
 /** The next free id for a prefix: B1, B2, ... after the highest existing number. */
 export function nextIds(prefix: string, existing: readonly string[], count: number): string[] {
   let max = 0;
