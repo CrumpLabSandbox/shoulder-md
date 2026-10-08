@@ -30,6 +30,54 @@ describe('seed folders', () => {
     expect(seedPrefix(guides[2]!.text)).toBeUndefined();
   });
 
+  it('reads guide files side by side, as the app writes them to Style/Guides', () => {
+    const grants = '# Grants\n\n- [G1] Open with the problem.\n';
+    const blog = '- Write to my future self.\n';
+    const guides = readSeed([
+      { path: 'Guides/base-style-guide.md', text: BASE },
+      { path: 'Guides/grants-2.md', text: grants },
+      { path: 'Guides/blog-posts.md', text: blog },
+      { path: 'Guides/README.md', text: '- not a guide\n' },
+      { path: 'Guides/grants-2.chat.md', text: '- a saved conversation\n' },
+      { path: 'Guides/grants-2.conflict-20261006-093000.md', text: grants },
+      { path: 'Guides/notes.md', text: 'Prose with no list items.' },
+    ]);
+    expect(guides.map((g) => [g.role, g.name])).toEqual([
+      ['base', 'Base style guide'],
+      ['genre', 'Blog posts'],
+      ['genre', 'Grants'],
+    ]);
+
+    // Picking the whole synced folder finds the guides and leaves documents and samples alone.
+    const whole = readSeed([
+      { path: 'Shoulder/Style/Guides/base-style-guide.md', text: BASE },
+      { path: 'Shoulder/Style/Guides/grants.md', text: grants },
+      { path: 'Shoulder/Style/Samples/README.md', text: '- one folder per genre\n' },
+      { path: 'Shoulder/Style/Samples/Grants/old-proposal.md', text: '- a list in a sample\n' },
+      { path: 'Shoulder/Documents/plan/plan.md', text: '# Plan\n\n- a list in a document\n' },
+    ]);
+    expect(whole.map((g) => g.name)).toEqual(['Base style guide', 'Grants']);
+
+    // A base guide is recognised by its heading or its ids, whatever the file is called.
+    expect(readSeed([{ path: 'x/mine.md', text: '# Base Style Guide\n\n- One.\n' }])[0]!.role).toBe(
+      'base',
+    );
+    expect(readSeed([{ path: 'x/mine.md', text: '# Mine\n\n- [B4] One.\n' }])[0]!.role).toBe(
+      'base',
+    );
+    // Both layouts in one folder: nothing is taken twice.
+    const both = readSeed([
+      { path: 'x/base.md', text: BASE },
+      { path: 'x/base-style-guide.md', text: BASE },
+      { path: 'x/grants/guide.md', text: grants },
+      { path: 'x/grants.md', text: grants },
+    ]);
+    expect(both.map((g) => [g.role, g.path])).toEqual([
+      ['base', 'x/base.md'],
+      ['genre', 'x/grants/guide.md'],
+    ]);
+  });
+
   it('lists items with their nested lines, and numbers a new guide', () => {
     const items = principleItems(BASE);
     expect(items.map((i) => i.id)).toEqual(['B1', 'B2']);

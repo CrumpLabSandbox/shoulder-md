@@ -264,7 +264,7 @@
       >
       <button
         onclick={() => seedInput?.click()}
-        title="Pick a folder holding base.md and one folder per genre with a guide.md. New guides are created; existing ones only gain principles they lack."
+        title="Pick a folder of guides: base.md with one folder per genre holding guide.md, or guide files side by side as in Style/Guides. New guides are created; existing ones only gain principles they lack."
         >Import guides from a folder…</button
       >
       <input

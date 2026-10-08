@@ -2104,7 +2104,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
   async function importSeed(files: SeedFile[]): Promise<string> {
     const guides = readSeed(files);
     if (guides.length === 0)
-      return 'No style guides found. Expected base.md and one folder per genre holding guide.md.';
+      return 'No style guides found. Expected base.md with one folder per genre holding guide.md, or guide files side by side as in Style/Guides.';
     await park();
     const report: string[] = [];
     for (const g of guides) {

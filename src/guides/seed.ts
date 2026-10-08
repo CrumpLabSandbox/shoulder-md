@@ -1,8 +1,13 @@
 /**
- * Seeding style guides from a folder of Markdown files:
+ * Seeding style guides from a folder of Markdown files. Two layouts are read:
  *
  *   base.md            the base guide
  *   <genre>/guide.md   one genre guide per folder (named by its first heading, else the folder)
+ *
+ * and the flat one the app itself writes to `Style/Guides/`: plain `.md` files side by side,
+ * either directly in the picked folder or in a folder called `Guides` inside it. There, the
+ * file named or headed "Base style guide" (or whose ids start with B) is the base guide and
+ * each other file is a genre named by its first heading. Files with no list items are skipped.
  *
  * Other files are ignored. A guide the app does not have is created from the file; for one it
  * has, principles the file adds are appended (with their indented explanation) and nothing
@@ -20,22 +25,63 @@ function heading(text: string): string | undefined {
   return /^#\s+(.+?)\s*$/m.exec(text)?.[1];
 }
 
-/** Finds the guides in a picked folder: the shallowest `base.md`, and every `guide.md`. */
+/** Files the app writes beside a guide that are not guides themselves. */
+const NOT_A_GUIDE = /(^readme\.md$)|(\.chat\.md$)|(\.revision\.md$)|(\.conflict-)/i;
+const BASE_NAME = /^base([-_ ]?style[-_ ]?guide)?(-\d+)?\.md$/i;
+
+function isBase(file: string, text: string): boolean {
+  if (BASE_NAME.test(file)) return true;
+  if (/^base style guide$/i.test(heading(text) ?? '')) return true;
+  return seedPrefix(text) === 'B';
+}
+
+/** A readable name from a file stem: `grant-proposals-2` becomes "Grant proposals". */
+function fromStem(file: string): string {
+  const words = file.replace(/\.md$/i, '').replace(/-\d+$/, '').replace(/[-_]+/g, ' ').trim();
+  return words ? words[0]!.toUpperCase() + words.slice(1) : 'Guide';
+}
+
+/**
+ * Finds the guides in a picked folder: the shallowest `base.md` and every `<genre>/guide.md`,
+ * plus plain guide files at the top of the folder or in a `Guides` folder.
+ */
 export function readSeed(files: readonly SeedFile[]): SeedGuide[] {
   const guides: SeedGuide[] = [];
   const sorted = [...files].sort(
     (a, b) => segments(a.path).length - segments(b.path).length || a.path.localeCompare(b.path),
   );
+  const hasBase = () => guides.some((g) => g.role === 'base');
+  const hasGenre = (name: string) =>
+    guides.some((g) => g.role === 'genre' && g.name.toLowerCase() === name.toLowerCase());
   for (const f of sorted) {
     const parts = segments(f.path);
-    const file = parts[parts.length - 1]?.toLowerCase();
+    const file = parts[parts.length - 1] ?? '';
+    const lower = file.toLowerCase();
     if (parts.some((p) => p.startsWith('.'))) continue;
-    if (file === 'base.md') {
-      if (!guides.some((g) => g.role === 'base'))
+    if (lower === 'base.md') {
+      if (!hasBase())
         guides.push({ role: 'base', name: 'Base style guide', text: f.text, path: f.path });
-    } else if (file === 'guide.md' && parts.length >= 2) {
+    } else if (lower === 'guide.md' && parts.length >= 2) {
       const name = heading(f.text) ?? parts[parts.length - 2]!;
-      guides.push({ role: 'genre', name, text: f.text, path: f.path });
+      if (!hasGenre(name)) guides.push({ role: 'genre', name, text: f.text, path: f.path });
+    }
+  }
+  // The flat layout: files side by side, as the app writes them to Style/Guides/.
+  for (const f of sorted) {
+    const parts = segments(f.path);
+    const file = parts[parts.length - 1] ?? '';
+    const lower = file.toLowerCase();
+    if (!lower.endsWith('.md') || lower === 'base.md' || lower === 'guide.md') continue;
+    if (parts.some((p) => p.startsWith('.')) || NOT_A_GUIDE.test(file)) continue;
+    const inGuides = parts[parts.length - 2]?.toLowerCase() === 'guides';
+    if (parts.length > 2 && !inGuides) continue;
+    if (principleItems(f.text).length === 0) continue;
+    if (isBase(file, f.text)) {
+      if (!hasBase())
+        guides.push({ role: 'base', name: 'Base style guide', text: f.text, path: f.path });
+    } else {
+      const name = heading(f.text) ?? fromStem(file);
+      if (!hasGenre(name)) guides.push({ role: 'genre', name, text: f.text, path: f.path });
     }
   }
   return guides;
