@@ -509,6 +509,20 @@ export class FolderSync {
     await this.drop(rec.folder, rec.base + PROPOSALS_EXT);
   }
 
+  /** A text file at a path inside the folder that belongs to no document (the inbox's files). */
+  async readAt(folder: string, name: string): Promise<string | undefined> {
+    const handle = await this.fileAt(folder, name);
+    return handle ? (await handle.getFile()).text() : undefined;
+  }
+
+  async writeAt(folder: string, name: string, content: string): Promise<void> {
+    await this.put(folder, name, content);
+  }
+
+  async removeAt(folder: string, name: string): Promise<void> {
+    await this.drop(folder, name);
+  }
+
   /** Suggested principles waiting next to a guide, if any (see guides/suggest.ts). */
   async suggestions(
     docId: string,

@@ -104,6 +104,7 @@ export function menuTemplate(send, appName) {
         item('Ask Claude to Suggest Edits…', 'ask-claude', 'Alt+Cmd+K'),
         item('Chat with Claude', 'chat', 'Alt+Cmd+J'),
         item('Draft Principles from Samples…', 'draft-principles'),
+        item('Principle Inbox', 'inbox'),
         sep,
         item('Add a Reason', 'reason', 'Alt+Cmd+E'),
         item('Comment on Selection', 'comment', 'Alt+Cmd+C'),

@@ -20,3 +20,6 @@ export function chatArgs(
 export const GUIDE_TOOLS: string[];
 export function guidePrompt(guideFile: string, all?: boolean): string;
 export function guideArgs(guideFile: string, all?: boolean, model?: string): string[];
+export const INBOX_TOOLS: string[];
+export function inboxPrompt(all?: boolean): string;
+export function inboxArgs(all?: boolean, model?: string): string[];

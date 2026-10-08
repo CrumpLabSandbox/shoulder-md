@@ -20,7 +20,7 @@ import {
 import { FolderSync, type Asset, type External } from '../folder/sync';
 import { folderSupported, permissionOf, pickFolder, type DirHandleLike } from '../folder/fs';
 import { reviveHandle, sameNativeFolder, storableHandle, type NativeDir } from '../folder/native';
-import { appBridge, type ClaudeEvent } from '../app/bridge';
+import { appBridge, type AppBridge, type ClaudeEvent } from '../app/bridge';
 import { cleanToRevision, editsToMatch, type OpBuilder } from '../folder/merge';
 import {
   baseGuideTemplate,
@@ -65,6 +65,21 @@ import {
   suggestionOps,
   type Suggestion,
 } from '../guides/suggest';
+import {
+  DECISIONS_FILE,
+  EDITS_FILE,
+  INBOX,
+  SUGGESTIONS_FILE,
+  evidence,
+  inboxEdits,
+  parseDecisions,
+  parseInbox,
+  placeReword,
+  serializeInbox,
+  type Inbox,
+  type InboxDecision,
+  type InboxEdit,
+} from '../guides/inbox';
 import { nowIso, isoAt } from '../util/time';
 import type { Author, Document, Op, State } from '../model/types';
 import { appendOp, revisionText } from '../model/apply';
@@ -1435,6 +1450,8 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
   /* ---------- asking Claude Code from inside the Mac app ---------- */
 
   type ClaudeRun = {
+    /** What was asked for: edits to a document, principles for a guide, or the inbox. */
+    kind: 'edits' | 'guide' | 'inbox';
     docId: string;
     title: string;
     status: 'running' | 'done' | 'error';
@@ -1445,10 +1462,11 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
 
   /** Why Claude cannot be asked about the open document right now, or undefined if it can. */
   async function claudeBlocked(
-    use: 'edits' | 'chat' | 'guide' = 'edits',
+    use: 'edits' | 'chat' | 'guide' | 'inbox' = 'edits',
   ): Promise<string | undefined> {
     const bridge = appBridge();
     if (!bridge) return 'Asking Claude from inside the app needs the Mac app.';
+    if (use === 'inbox') return claudeUnavailable(bridge);
     if (!current) return 'Open a document first.';
     const guide = current.state.meta.guide;
     if (use === 'guide') {
@@ -1463,13 +1481,18 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     }
     if (!claudeAllowed(current.state.meta))
       return 'Claude is switched off for this document. Switch it on from the toolbar to ask.';
+    if (use === 'edits' && proposalOffer?.docId === current.id)
+      return 'Claude’s earlier proposals for this document are still waiting. Show or discard them first.';
+    return claudeUnavailable(bridge);
+  }
+
+  /** The reasons that apply to any request: no folder Claude Code can work in, busy, not installed. */
+  async function claudeUnavailable(bridge: AppBridge): Promise<string | undefined> {
     const sync = syncs.shared;
     if (!sync || !isConnected('shared') || !('nativePath' in sync.dir))
       return 'Choose a shared folder first (Library → Folders). Claude Code works on the copy there.';
-    if (use === 'edits' && proposalOffer?.docId === current.id)
-      return 'Claude’s earlier proposals for this document are still waiting. Show or discard them first.';
     if (claudeRun?.status === 'running' || Object.values(chats).some((c) => c.running))
-      return 'Claude is already working on a document.';
+      return 'Claude is already working on something.';
     const status = await bridge.claude.status();
     if (!status.available)
       return 'Claude Code is not installed on this Mac. Install it, run “claude” once in Terminal to sign in, then try again. The app uses that sign-in and holds no credentials of its own.';
@@ -1491,6 +1514,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     const title = displayTitle(doc.state.meta.title, viewText(doc.state, 'clean'));
     if (!file) {
       claudeRun = {
+        kind: 'edits',
         docId: doc.id,
         title,
         status: 'error',
@@ -1500,7 +1524,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       };
       return;
     }
-    claudeRun = { docId: doc.id, title, status: 'running', steps: [], summary: '' };
+    claudeRun = { kind: 'edits', docId: doc.id, title, status: 'running', steps: [], summary: '' };
     const stop = bridge.claude.onEvent((e) => {
       const run = claudeRun;
       if (run?.docId === doc.id && run.status === 'running' && e.kind === 'step')
@@ -1539,6 +1563,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     const title = displayTitle(doc.state.meta.title, viewText(doc.state, 'clean'));
     if (!file) {
       claudeRun = {
+        kind: 'guide',
         docId: doc.id,
         title,
         status: 'error',
@@ -1547,7 +1572,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       };
       return;
     }
-    claudeRun = { docId: doc.id, title, status: 'running', steps: [], summary: '' };
+    claudeRun = { kind: 'guide', docId: doc.id, title, status: 'running', steps: [], summary: '' };
     const stop = bridge.claude.onEvent((e) => {
       const run = claudeRun;
       if (run?.docId === doc.id && run.status === 'running' && e.kind === 'step')
@@ -1568,6 +1593,247 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
         summary: outcome.text,
       };
     void poll();
+  }
+
+  /* ---------- the principle inbox ---------- */
+
+  // Suggestions wait in Style/Inbox/ in the shared folder (see guides/inbox.ts). The app writes
+  // the digest of reasoned edits, Claude Code writes suggestions, and decisions are logged.
+  let inbox = $state.raw<Inbox>({ suggestions: [], links: [] });
+  let inboxEditList = $state.raw<InboxEdit[]>([]);
+
+  const guideByName = (name: string) =>
+    name.trim().toLowerCase() === 'base'
+      ? baseGuide
+      : genres.find((g) => g.title.trim().toLowerCase() === name.trim().toLowerCase());
+
+  /** Writes the author's reasoned edits, from documents Claude may read, for Claude Code. */
+  async function writeDigest(sync: FolderSync): Promise<number> {
+    await park();
+    const edits: InboxEdit[] = [];
+    for (const d of docs) {
+      if (d.guide || !claudeAllowed(d)) continue;
+      const doc = current?.id === d.id ? current : (await loadDoc(d.id))?.doc;
+      if (!doc) continue;
+      const genre = doc.state.meta.genre
+        ? genres.find((g) => g.id === doc.state.meta.genre)?.title
+        : undefined;
+      edits.push(...inboxEdits(doc, { title: d.title, ...(genre ? { genre } : {}) }));
+    }
+    await sync.writeAt(
+      INBOX,
+      EDITS_FILE,
+      JSON.stringify({ generatedAt: nowIso(), edits }, null, 2) + '\n',
+    );
+    inboxEditList = edits;
+    return edits.length;
+  }
+
+  /** Loads what is waiting in the inbox from the shared folder. */
+  async function refreshInbox(): Promise<void> {
+    const sync = syncs.shared;
+    if (!sync || !isConnected('shared')) {
+      inbox = { suggestions: [], links: [] };
+      return;
+    }
+    try {
+      const text = await sync.readAt(INBOX, SUGGESTIONS_FILE);
+      inbox = text ? parseInbox(text) : { suggestions: [], links: [] };
+      const digest = await sync.readAt(INBOX, EDITS_FILE);
+      if (digest) inboxEditList = (JSON.parse(digest) as { edits?: InboxEdit[] }).edits ?? [];
+    } catch (e) {
+      inbox = { suggestions: [], links: [] };
+      folderNotice = `The principle inbox could not be read: ${e instanceof Error ? e.message : String(e)}.`;
+    }
+  }
+
+  async function saveInbox(next: Inbox): Promise<void> {
+    inbox = next;
+    const sync = syncs.shared;
+    if (!sync) return;
+    if (next.suggestions.length + next.links.length === 0)
+      await sync.removeAt(INBOX, SUGGESTIONS_FILE);
+    else await sync.writeAt(INBOX, SUGGESTIONS_FILE, serializeInbox(next));
+  }
+
+  async function logDecision(decision: Omit<InboxDecision, 'at'>): Promise<void> {
+    const sync = syncs.shared;
+    if (!sync) return;
+    const decisions = parseDecisions(await sync.readAt(INBOX, DECISIONS_FILE));
+    decisions.push({ at: nowIso(), ...decision });
+    await sync.writeAt(INBOX, DECISIONS_FILE, JSON.stringify({ decisions }, null, 2) + '\n');
+  }
+
+  /**
+   * Has the user's own Claude Code read the reasoned edits and fill the inbox (the
+   * suggest-principles skill). With `all`, edits analysed before are looked at again.
+   */
+  async function suggestFromEdits(all: boolean, model?: string): Promise<void> {
+    const bridge = appBridge();
+    if (!bridge || (await claudeBlocked('inbox'))) return;
+    const sync = syncs.shared!;
+    const base = { kind: 'inbox' as const, docId: '', title: 'Principle inbox', steps: [] };
+    claudeRun = { ...base, status: 'running', summary: '' };
+    let outcome: ClaudeEvent;
+    const stop = bridge.claude.onEvent((e) => {
+      const run = claudeRun;
+      if (run?.kind === 'inbox' && run.status === 'running' && e.kind === 'step')
+        claudeRun = { ...run, steps: [...run.steps, e.text] };
+    });
+    try {
+      const count = await writeDigest(sync);
+      outcome =
+        count === 0
+          ? {
+              kind: 'error',
+              text: 'There are no reasoned edits yet. Edit with track changes on and say why (the “Why?” field), then try again.',
+            }
+          : await bridge.claude.inbox((sync.dir as NativeDir).nativePath, all, model);
+    } catch (e) {
+      outcome = { kind: 'error', text: e instanceof Error ? e.message : String(e) };
+    } finally {
+      stop();
+    }
+    if (claudeRun?.kind === 'inbox')
+      claudeRun = {
+        ...claudeRun,
+        status: outcome.kind === 'error' ? 'error' : 'done',
+        summary: outcome.text,
+      };
+    await refreshInbox();
+  }
+
+  /** Applies ops to a document whether or not it is the open one. */
+  async function applyTo(
+    docId: string,
+    build: (state: State) => (Op | OpBuilder)[],
+  ): Promise<boolean> {
+    if (current?.id === docId) {
+      const items = build(current.state);
+      if (items.length === 0) return false;
+      if (view !== 'revision') setView('revision');
+      const sel = bridge?.getSelection() ?? { anchor: 0, head: 0 };
+      const inverse = applyModelOps(items);
+      recordUndo({
+        ops: inverse,
+        before: sel,
+        after: bridge?.getSelection() ?? sel,
+        at: Date.now(),
+      });
+      await autosave.flush();
+      return true;
+    }
+    const loaded = await loadDoc(docId);
+    if (!loaded) return false;
+    const items = build(loaded.doc.state);
+    if (items.length === 0) return false;
+    let doc: Document | undefined = loaded.doc;
+    for (const item of items) {
+      const op: Op | undefined = typeof item === 'function' ? item(doc.state) : item;
+      if (!op) continue;
+      doc = await appendToStored(docId, JSON.parse(JSON.stringify(op)) as Op);
+      if (!doc) return false;
+    }
+    await refreshList();
+    await syncDoc(doc);
+    return true;
+  }
+
+  /**
+   * Settles one inbox suggestion. 'add' puts it into its guide as a tracked change by Claude
+   * (optionally into another guide, or reworded first); 'dismiss' drops it and remembers it.
+   */
+  async function resolveSuggestion(
+    index: number,
+    action: 'add' | 'dismiss',
+    change: { guide?: string; principle?: string } = {},
+  ): Promise<void> {
+    const s = inbox.suggestions[index];
+    if (!s) return;
+    const guideName = change.guide ?? s.guide;
+    const wording = change.principle?.trim() || s.principle;
+    if (action === 'add') {
+      const guide = guideByName(guideName);
+      if (!guide) {
+        folderNotice = `There is no “${guideName}” guide to add this to. Pick another guide, or create it in Style guides first.`;
+        return;
+      }
+      const opts = { author: CLAUDE_AUTHOR, ts: nowIso(), id: ulid };
+      const done = await applyTo(guide.id, (state) => {
+        const clean = viewText(state, 'clean');
+        if (s.kind === 'reword' && s.id) {
+          const placed = placeReword(clean, s.id, wording);
+          if (!placed) return [];
+          const proposal = { ...placed.proposal, ...(s.reason ? { reason: s.reason } : {}) };
+          return proposalOps([{ ...placed, proposal }], opts);
+        }
+        const { placed } = placeSuggestions(clean, [
+          {
+            section: s.section ?? '',
+            principle: wording,
+            examples: evidence(s, inboxEditList),
+            ...(s.reason ? { reason: s.reason } : {}),
+          },
+        ]);
+        return suggestionOps(placed, opts);
+      });
+      folderNotice = done
+        ? `${s.kind === 'reword' ? `Reworded ${s.id}` : 'Added a principle'} in “${guide.title}” as a tracked change. Open the guide to accept it.`
+        : s.kind === 'reword'
+          ? `“${guide.title}” has no principle ${s.id} to reword, or already says this.`
+          : `“${guide.title}” already has this principle.`;
+      if (done)
+        await logDecision({
+          action: s.kind === 'reword' ? 'reworded' : 'added',
+          guide: guideName,
+          ...(s.id ? { id: s.id } : {}),
+          principle: wording,
+          edits: s.edits,
+        });
+    } else {
+      await logDecision({
+        action: 'dismissed',
+        guide: s.guide,
+        principle: s.principle,
+        edits: s.edits,
+      });
+    }
+    await saveInbox({ ...inbox, suggestions: inbox.suggestions.filter((_, i) => i !== index) });
+  }
+
+  /** Settles a suggested link from an edit to principles: confirm links them, skip drops it. */
+  async function resolveLink(index: number, confirm: boolean): Promise<void> {
+    const l = inbox.links[index];
+    if (!l) return;
+    const cut = l.edit.indexOf(':');
+    const docId = l.edit.slice(0, cut);
+    const changeId = l.edit.slice(cut + 1);
+    let linked = false;
+    if (confirm) {
+      linked = await applyTo(docId, (state) => {
+        const rec = state.changes[changeId];
+        if (!rec) return [];
+        const principles = [...(rec.principles ?? [])];
+        for (const id of l.principles) if (!principles.includes(id)) principles.push(id);
+        return [
+          {
+            id: ulid(),
+            type: 'set_principles',
+            author: author.id,
+            ts: nowIso(),
+            changeId,
+            principles,
+          },
+        ];
+      });
+      if (!linked) folderNotice = 'That edit could not be found any more, so it was not linked.';
+    }
+    await logDecision({
+      action: linked ? 'linked' : 'link-skipped',
+      edit: l.edit,
+      principles: l.principles,
+    });
+    await saveInbox({ ...inbox, links: inbox.links.filter((_, i) => i !== index) });
   }
 
   /* ---------- chatting with Claude Code about the open document ---------- */
@@ -2255,6 +2521,17 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       setChat(current.id, () => NO_CHAT);
     },
     draftPrinciples,
+    get inbox() {
+      return inbox;
+    },
+    get inboxEdits() {
+      return inboxEditList;
+    },
+    refreshInbox,
+    suggestFromEdits,
+    resolveSuggestion,
+    resolveLink,
+    principleText: (id: string) => principleTexts()[id],
     get suggestionOffer() {
       return suggestionOffer;
     },

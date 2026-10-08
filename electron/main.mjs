@@ -6,7 +6,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { menuTemplate } from './menu.mjs';
-import { askClaude, cancelClaude, chatClaude, claudeStatus, draftGuide } from './claude.mjs';
+import {
+  askClaude,
+  cancelClaude,
+  chatClaude,
+  claudeStatus,
+  draftGuide,
+  suggestPrinciples,
+} from './claude.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(here, '..', 'dist');
@@ -170,6 +177,11 @@ function registerClaudeHandlers() {
     checkDoc(folder, guideFile);
     const onEvent = forward(event.sender);
     return draftGuide({ folder, guideFile, all: !!all, model, skillsSource: SKILLS, onEvent });
+  });
+  ipcMain.handle('claude:inbox', async (event, folder, all, model) => {
+    if (!granted.includes(folder)) throw new Error('That folder has not been opened in the app.');
+    const onEvent = forward(event.sender);
+    return suggestPrinciples({ folder, all: !!all, model, skillsSource: SKILLS, onEvent });
   });
   ipcMain.handle('claude:cancel', () => cancelClaude());
 }

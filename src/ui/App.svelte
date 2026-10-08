@@ -149,6 +149,7 @@
     'ask-claude': () => (claudeOpen = true),
     chat: () => (chatOpen = !chatOpen),
     'draft-principles': () => (claudeOpen = true),
+    inbox: () => (libraryOpen = true),
     reason: () => focusReason(),
     comment: () => {
       marginOpen = true;
@@ -278,6 +279,8 @@
         {ws}
         libraryDefault={settings.value.libraryDefault}
         onlibrarydefault={(v) => settings.set('libraryDefault', v)}
+        claudeModel={settings.value.claudeModel}
+        onclaudemodel={(m) => settings.set('claudeModel', m)}
         onopen={(id) => {
           libraryOpen = false;
           void ws.open(id);

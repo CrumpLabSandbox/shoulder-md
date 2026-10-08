@@ -13,19 +13,25 @@ function describeTool(name, input = {}) {
   if ((name === 'Write' || name === 'Edit') && file)
     return `Writing ${String(file).split('/').pop()}`;
   if (name === 'Bash' && input.command)
-    return /guide\.mjs\s+samples/.test(input.command)
-      ? 'Finding the samples to read'
-      : /guide\.mjs\s+check/.test(input.command)
+    return /inbox\.mjs\s+edits/.test(input.command)
+      ? 'Reading your reasoned edits'
+      : /inbox\.mjs\s+check/.test(input.command)
         ? 'Checking the suggestions'
-        : /guide\.mjs\s+done/.test(input.command)
-          ? 'Recording the samples as read'
-          : /^textutil\b/.test(input.command)
-            ? 'Reading a Word file'
-            : /shoulder\.mjs\s+check/.test(input.command)
-              ? 'Checking the proposals'
-              : /shoulder\.mjs\s+context/.test(input.command)
-                ? 'Finding the guides that apply'
-                : `Running ${clip(input.command, 60)}`;
+        : /inbox\.mjs\s+done/.test(input.command)
+          ? 'Recording the edits as analysed'
+          : /guide\.mjs\s+samples/.test(input.command)
+            ? 'Finding the samples to read'
+            : /guide\.mjs\s+check/.test(input.command)
+              ? 'Checking the suggestions'
+              : /guide\.mjs\s+done/.test(input.command)
+                ? 'Recording the samples as read'
+                : /^textutil\b/.test(input.command)
+                  ? 'Reading a Word file'
+                  : /shoulder\.mjs\s+check/.test(input.command)
+                    ? 'Checking the proposals'
+                    : /shoulder\.mjs\s+context/.test(input.command)
+                      ? 'Finding the guides that apply'
+                      : `Running ${clip(input.command, 60)}`;
   if ((name === 'Glob' || name === 'Grep') && file) return `Searching for ${clip(file, 60)}`;
   return `Using ${name}`;
 }
@@ -173,5 +179,35 @@ export function guideArgs(guideFile, all, model) {
   const args = ['-p', guidePrompt(guideFile, all), '--output-format', 'stream-json', '--verbose'];
   if (model && CLAUDE_MODELS.includes(model)) args.push('--model', model);
   args.push('--allowedTools', ...GUIDE_TOOLS);
+  return args;
+}
+
+/* ---------- the principle inbox ---------- */
+
+export const INBOX_TOOLS = [
+  'Read',
+  'Glob',
+  'Grep',
+  'Write(/Style/Inbox/suggestions.json)',
+  'Edit(/Style/Inbox/suggestions.json)',
+  'Bash(node .claude/skills/suggest-principles/inbox.mjs:*)',
+];
+
+export function inboxPrompt(all) {
+  return (
+    `Follow the instructions in .claude/skills/suggest-principles/SKILL.md for this folder. The ` +
+    `skill's helper script is .claude/skills/suggest-principles/inbox.mjs; run it from here. ` +
+    (all ? 'Look at every edit again (pass --all to the edits command). ' : '') +
+    `You are running unattended inside the author's writing app: do not ask questions. If ` +
+    `something is ambiguous, make the conservative choice and say so at the end. Write only ` +
+    `Style/Inbox/suggestions.json (the helper writes its own record). Finish with a short ` +
+    `summary for the author.`
+  );
+}
+
+export function inboxArgs(all, model) {
+  const args = ['-p', inboxPrompt(all), '--output-format', 'stream-json', '--verbose'];
+  if (model && CLAUDE_MODELS.includes(model)) args.push('--model', model);
+  args.push('--allowedTools', ...INBOX_TOOLS);
   return args;
 }

@@ -6,7 +6,14 @@ import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { chatArgs, claudeArgs, eventsFromLine, guideArgs, takeLines } from './claude-events.mjs';
+import {
+  chatArgs,
+  claudeArgs,
+  eventsFromLine,
+  guideArgs,
+  inboxArgs,
+  takeLines,
+} from './claude-events.mjs';
 
 const run = (file, args, opts = {}) =>
   new Promise((resolve) => {
@@ -136,6 +143,11 @@ export function askClaude({ folder, docFile, note, model, skillsSource, onEvent 
 /** Reads a genre's samples and writes suggested principles for its guide (draft-principles). */
 export function draftGuide({ folder, guideFile, all, model, skillsSource, onEvent }) {
   return runClaude({ folder, args: guideArgs(guideFile, all, model), skillsSource, onEvent });
+}
+
+/** Reads the author's reasoned edits and writes inbox suggestions (suggest-principles). */
+export function suggestPrinciples({ folder, all, model, skillsSource, onEvent }) {
+  return runClaude({ folder, args: inboxArgs(all, model), skillsSource, onEvent });
 }
 
 /** One turn of a conversation about a document; `sessionId` continues an earlier turn. */

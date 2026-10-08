@@ -35,6 +35,7 @@ export const MENU_COMMANDS = [
   'ask-claude',
   'chat',
   'draft-principles',
+  'inbox',
   'reason',
   'comment',
 ] as const;

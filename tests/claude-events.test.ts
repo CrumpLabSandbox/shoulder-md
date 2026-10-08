@@ -3,7 +3,9 @@ import {
   ALLOWED_TOOLS,
   CHAT_TOOLS,
   GUIDE_TOOLS,
+  INBOX_TOOLS,
   guideArgs,
+  inboxArgs,
   CLAUDE_MODELS,
   chatArgs,
   chatSystemPrompt,
@@ -142,6 +144,19 @@ describe('Claude Code output', () => {
     expect(GUIDE_TOOLS.filter((t) => t.startsWith('Bash'))).toEqual([
       'Bash(node .claude/skills/draft-principles/guide.mjs:*)',
       'Bash(textutil -convert txt -stdout:*)',
+    ]);
+  });
+
+  it('fills the inbox with its own narrow allow-list', () => {
+    const args = inboxArgs(true, 'opus');
+    expect(args[1]).toContain('suggest-principles/SKILL.md');
+    expect(args[1]).toContain('--all');
+    expect(inboxArgs()[1]).not.toContain('--all');
+    expect(args.slice(args.indexOf('--allowedTools') + 1)).toEqual(INBOX_TOOLS);
+    expect(INBOX_TOOLS.filter((t) => /^(Write|Edit|Bash)/.test(t))).toEqual([
+      'Write(/Style/Inbox/suggestions.json)',
+      'Edit(/Style/Inbox/suggestions.json)',
+      'Bash(node .claude/skills/suggest-principles/inbox.mjs:*)',
     ]);
   });
 

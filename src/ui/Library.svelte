@@ -1,5 +1,7 @@
 <script lang="ts">
   import FolderPanel from './FolderPanel.svelte';
+  import InboxPanel from './InboxPanel.svelte';
+  import type { ClaudeModel } from '../app/bridge';
   import { onMount } from 'svelte';
   import type { Workspace } from '../docs/workspace.svelte';
   import type { LibraryEntry } from '../persist/idb';
@@ -9,12 +11,17 @@
     ws,
     libraryDefault,
     onlibrarydefault,
+    claudeModel,
+    onclaudemodel,
     onopen,
     onclose,
   }: {
     ws: Workspace;
     libraryDefault: boolean;
     onlibrarydefault: (v: boolean) => void;
+    /** The model Claude Code is asked to use, shared with the Ask Claude and chat panels. */
+    claudeModel: ClaudeModel;
+    onclaudemodel: (m: ClaudeModel) => void;
     onopen: (id: string) => void;
     onclose: () => void;
   } = $props();
@@ -242,6 +249,8 @@
       New documents join the library
     </label>
   </div>
+
+  <InboxPanel {ws} model={claudeModel} onmodel={onclaudemodel} {onopen} />
 
   <FolderPanel {ws} />
 

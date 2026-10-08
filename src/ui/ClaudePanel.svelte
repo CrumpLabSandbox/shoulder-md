@@ -65,9 +65,11 @@
     {:else if run.status === 'done'}
       <p class="summary">{run.summary || 'Finished.'}</p>
       <p class="state">
-        {onGuide
-          ? 'Any suggested principles appear in a banner above; review them there.'
-          : 'Any proposed edits appear in a banner above; review them there.'}
+        {run.kind === 'inbox'
+          ? 'Suggestions are in the Library, under Principle inbox.'
+          : run.kind === 'guide'
+            ? 'Any suggested principles appear in a banner above; review them there.'
+            : 'Any proposed edits appear in a banner above; review them there.'}
       </p>
       <div class="buttons"><button class="primary" onclick={close}>Close</button></div>
     {:else}

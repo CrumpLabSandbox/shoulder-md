@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('shoulderApp', {
       ipcRenderer.invoke('claude:chat', folder, docFile, message, sessionId, model),
     draft: (folder, guideFile, all, model) =>
       ipcRenderer.invoke('claude:draft', folder, guideFile, all, model),
+    inbox: (folder, all, model) => ipcRenderer.invoke('claude:inbox', folder, all, model),
     cancel: () => ipcRenderer.invoke('claude:cancel'),
     onEvent: (handler) => {
       const listener = (_event, e) => handler(e);

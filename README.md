@@ -39,14 +39,16 @@ Changes → Chat with Claude (⌥⌘J) opens a conversation about the open docum
 
 On a genre guide, **Draft principles from samples…** has Claude read the examples of your writing in `Style/Samples/<Genre>/` (only files new since the last run, unless you ask for all) and suggest principles. Each arrives as a tracked change in the guide with a quoted example and a reason, for you to accept or reject.
 
+The **Principle inbox** in the Library has Claude read the edits you gave reasons for and suggest principles they have in common, rewordings of existing ones, and links from edits to principles. You add, change or dismiss each one; what you add arrives in the guide as a tracked change, and what you dismiss is not suggested again.
+
 - This runs **your own Claude Code**. The app starts the `claude` program already installed on your Mac, in your shared folder. It signs nobody in, stores no credentials, and has no API key; it uses whatever account your Claude Code is signed in with, and that account's usage.
 - If Claude Code is not installed and signed in (`claude` in a terminal), the feature is unavailable and the app says so. Everything else works without it.
 - Claude Code is allowed to read the folder, write `*.proposals.json` files (and, in a chat, one `*.revision.md` copy per document), and run the skill's helper script. Nothing else is permitted while it runs unattended, and it never writes to a document's own files.
-- The app copies its skills (`propose-edits`, `draft-principles`) into `.claude/skills/` inside your shared folder.
+- The app copies its skills (`propose-edits`, `draft-principles`, `suggest-principles`) into `.claude/skills/` inside your shared folder.
 
 The Mac app keeps its documents in its own storage, separate from any browser. To bring existing work in, choose your synced folder with File → Choose Shared Folder…; the documents and guides in it are added. Use either the browser or the Mac app on a given folder, not both at once.
 
-Next: a principle inbox that Claude Code fills from your reasoned edits, run through Claude Code on the shared folder (no API key).
+Next: measuring whether the guides make Claude edit more like you, once there are enough reasoned edits to test against.
 
 ## Develop
 

@@ -52,6 +52,8 @@ export type ClaudeBridge = {
   ): Promise<ClaudeEvent>;
   /** Reads a genre's samples and writes suggested principles for its guide. */
   draft(folder: string, guideFile: string, all?: boolean, model?: string): Promise<ClaudeEvent>;
+  /** Reads the author's reasoned edits and writes suggestions for the principle inbox. */
+  inbox(folder: string, all?: boolean, model?: string): Promise<ClaudeEvent>;
   cancel(): Promise<void>;
   onEvent(handler: (event: ClaudeEvent) => void): () => void;
 };
