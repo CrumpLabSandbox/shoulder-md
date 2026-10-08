@@ -5,11 +5,13 @@
   import ChangeCard from './ChangeCard.svelte';
   import CommentCard from './CommentCard.svelte';
   import DraftCard from './DraftCard.svelte';
+  import { layoutCards } from './marginLayout';
 
   let {
     ws,
     measure,
     tick,
+    onscrollby,
     showTags,
     ontoggletags,
     showReason,
@@ -26,6 +28,8 @@
     measure: (pos: number) => number | undefined;
     /** Bumped when the editor scrolls, resizes, or changes, to re-measure. */
     tick: number;
+    /** Scrolls the document; the wheel over the margin moves the text and its cards together. */
+    onscrollby?: (dy: number) => void;
   } = $props();
 
   type Item =
@@ -55,22 +59,36 @@
     return out.sort((a, b) => a.from - b.from);
   });
 
-  // Desired tops from the editor, then pushed down so cards never overlap.
+  let viewport = $state(0);
+  let aside: HTMLElement | undefined = $state();
+  let cardsEl: HTMLElement | undefined = $state();
+
+  // Desired tops from the editor, then moved apart so cards never overlap (see marginLayout.ts).
   const tops = $derived.by(() => {
     void tick;
-    const out: Record<string, number> = {};
-    let floor = 0;
-    for (const it of items) {
-      const wanted = measure(Math.floor(it.from));
-      if (wanted === undefined) {
-        out[it.key] = -10_000;
-        continue;
-      }
-      const top = Math.max(wanted, floor);
-      out[it.key] = top;
-      floor = top + (heights[it.key] ?? 80) + GAP;
-    }
-    return out;
+    void heights;
+    // The editor measures from its own top; the cards start lower, under the margin's header.
+    const offset =
+      aside && cardsEl
+        ? cardsEl.getBoundingClientRect().top - aside.getBoundingClientRect().top
+        : 0;
+    const beside = (pos: number) => {
+      const y = measure(pos);
+      return y === undefined ? undefined : y - offset;
+    };
+    return layoutCards(
+      items.map((it) => ({
+        key: it.key,
+        wanted: beside(Math.floor(it.from)),
+        height: heights[it.key] ?? 80,
+        active:
+          (it.kind === 'change' && it.change.id === ws.activeChangeId) ||
+          (it.kind === 'comment' && it.thread.threadId === ws.activeThreadId) ||
+          it.kind === 'draft',
+      })),
+      viewport || 600,
+      GAP,
+    );
   });
 
   const byAuthor = $derived.by(() => {
@@ -101,7 +119,7 @@
   }
 </script>
 
-<aside class="margin no-print" aria-label="Changes and comments">
+<aside class="margin no-print" aria-label="Changes and comments" bind:this={aside}>
   <div class="head">
     <span>{headline}</span>
     <div class="menu">
@@ -194,7 +212,16 @@
       {/if}
     </div>
   {/if}
-  <div class="cards">
+  <div
+    class="cards"
+    bind:this={cardsEl}
+    bind:clientHeight={viewport}
+    onwheel={(e) => {
+      if (!onscrollby || e.ctrlKey) return;
+      e.preventDefault();
+      onscrollby(e.deltaY);
+    }}
+  >
     {#each items as it (it.key)}
       <div
         class="slot"

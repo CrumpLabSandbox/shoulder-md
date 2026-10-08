@@ -65,6 +65,10 @@
     bridge?.focus();
   }
 
+  export function scrollBy(dy: number) {
+    bridge?.scrollBy(dy);
+  }
+
   export function measureTop(pos: number): number | undefined {
     return bridge?.measureTop(pos);
   }

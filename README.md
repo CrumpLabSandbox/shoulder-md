@@ -1,10 +1,50 @@
-# shoulder-md
+# Welcome to shoulder
 
-A browser-based Markdown editor that is growing Word-style tracked changes and comments on top of a structured JSON layer that records every edit and the reason for it. See [plan.md](plan.md) for the full design and roadmap, and [idea.json](idea.json) for the seed.
+By Matt Crump
 
-## Status
+This is a markdown editor with tracked changes and more. It is also a personal experimental tool, built primarily with Claude Code, that may involve breaking changes across iterations.
 
-Phases 0 to 7 of the plan: a Markdown writing app with Word-style tracked changes and comments, on a sentence-level document model and op log, with exports, an edits library, sync to a local folder, and style guides with a per-document Claude switch.
+## Reasons around my writing
+
+In my own writing and editing, I have found it useful to justify my sentences and word choices. For every part of a paper, I should be able to articulate why I chose the order of paragraphs I did, or within a paragraph, what I want each sentence "to do". I'm not always successful in this kind of meta-writing exercise, but it has helped me get clearer about what I'm trying to accomplish in writing and thinking. It often helps me identify problems in my writing that need to be fixed. If I can't give myself a good reason for a writing choice, then I think I should probably rewrite that part until it has a reason for being.
+
+For the most part I don't record the mental dialogue (peanut gallery in my head) that occurs throughout writing and editing. Building this app is partly a suggestion to myself to preserve some of my editorial thoughts alongside my writing.
+
+## Reasons for changes and a document memory
+
+So, in addition to being able to track changes in a markdown editor, this app allows one to enter reasons for the changes. In the background, a structured JSON file records the construction of the whole document: what was written, all associated changes, and reasons for those changes.
+
+## Claude tools
+
+This app is also a personal experiment in using Claude-type tools for specific writing tasks, particularly around spell-checking, line-editing, and personal style choices.
+
+In 2023, I messed around a bit with gpt for editing my writing, particularly as a spell-checker and for finding missing words that normal spell-checkers can't find. It worked OK.
+
+<https://www.crumplab.com/blog/665_realworld_editing/index.html>
+
+In this app, there are a few more possibilities. Some are:
+
+1. Create documents that record my own reasons for sentence changes, then use them as a training set so that a tool like Claude can take a pass as a line editor and suggest tracked changes that I can accept or reject
+2. Do the first thing across different genres of my own writing
+3. Create editing style guides and editing principle guides based on corpuses of my own writing, and use them to constrain suggested edits
+
+## Messing around
+
+I'm trying this out, changing it, trying it out some more. It's an experiment to learn more about my own writing process, and about coding apps this way.
+
+---
+
+## The rest of this README
+
+Everything below this line was written by Claude (Anthropic's AI model), which also wrote most of the code in this repository under Matt's direction. The text above is Matt's own, and is also the welcome document a new install opens with.
+
+### Examples
+
+[`examples/welcome-to-shoulder-md/`](examples/welcome-to-shoulder-md/) holds the welcome document above as the app saves it: the Markdown, and its `.shoulder.json` history file, which records how it was written, including tracked changes by Matt and edits suggested by Claude. Import the `.shoulder.json` file into the app (Documents → Import…) to step through it.
+
+### What it does
+
+A Markdown writing app with Word-style tracked changes and comments, on a sentence-level document model that records every edit and its reason. It runs in the browser and as a Mac app. Style guides, written as plain documents, hold the author's principles; Claude, run through the user's own Claude Code, can suggest edits against them, draft principles from writing samples, and suggest principles from the author's own reasoned edits. See [plan.md](plan.md) for the full design and what is built.
 
 - CodeMirror 6 editor with Markdown highlighting and a rendered preview (editor, split, or preview layouts).
 - Background autosave to the browser's IndexedDB on every change, with flushes on blur, tab hide, and unload.
@@ -22,7 +62,7 @@ Phases 0 to 7 of the plan: a Markdown writing app with Word-style tracked change
 
 - Claude as an editor: in Claude Code, ask for edits to a document in the shared folder (the `propose-edits` skill). Claude writes a proposals file beside it; the app offers them as tracked changes by "Claude", each with a reason and the principle it applies, for you to accept or reject.
 
-## Mac app
+### Mac app
 
 The same app runs in its own window with Mac menus and direct folder access (no permission prompts):
 
@@ -31,7 +71,7 @@ pnpm app          # build and run
 pnpm app:build    # package release/mac-arm64/Shoulder.app
 ```
 
-### Asking Claude from inside the Mac app
+#### Asking Claude from inside the Mac app
 
 Changes → Ask Claude to Suggest Edits… (or the Claude button in the toolbar) has Claude Code read the open document and its style guides and propose edits, which arrive as tracked changes.
 
@@ -50,7 +90,7 @@ The Mac app keeps its documents in its own storage, separate from any browser. T
 
 Next: measuring whether the guides make Claude edit more like you, once there are enough reasoned edits to test against.
 
-## Develop
+### Develop
 
 Requires Node 22 or newer. The project uses pnpm; if it is not installed, `corepack enable` (bundled with Node) sets it up, or run `npm install -g pnpm`. Plain `npm install` and `npm run dev` also work.
 
@@ -65,7 +105,7 @@ pnpm build      # static site in dist/
 
 Pushes to `main` deploy to GitHub Pages via `.github/workflows/deploy.yml`.
 
-## Shortcuts
+### Shortcuts
 
 | Keys               | Action                                   |
 | ------------------ | ---------------------------------------- |
@@ -84,6 +124,6 @@ Pushes to `main` deploy to GitHub Pages via `.github/workflows/deploy.yml`.
 | ⌘⌥L                | Open or close the library                |
 | ⌘Z / ⌘⇧Z           | Undo / redo (through the model)          |
 
-## License
+### License
 
 MIT. Bundled fonts are under the SIL Open Font License.

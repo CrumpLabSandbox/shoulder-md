@@ -1,19 +1,13 @@
 /** The document a fresh install opens with, and how to tell that nobody has edited it. */
 import type { Document } from '../model/types';
 import { revisionText } from '../model/apply';
+import welcomeText from '../../examples/welcome-to-shoulder-md/welcome-to-shoulder-md.md?raw';
 
-export const WELCOME = `# Welcome to shoulder-md
-
-A Markdown editor with Word-style **tracked changes**. Underneath, every edit is recorded as an operation on a sentence-level model, so nothing about a document's editing history is lost.
-
-- Turn on **Track changes** in the toolbar (⌘⌥T) and edit this paragraph: deletions stay struck through, insertions are underlined, and a card appears in the margin.
-- Accept or reject a change from its card, or with ⌘⌥A and ⌘⌥R while the cursor is in it. ⌘⌥N and ⌘⌥P jump between changes.
-- Add a reason to a change from its card. Reasons are the point: the library of edits with reasons is what will teach Claude to edit like you.
-- Switch between **Markup**, **Clean**, and **Original** views to see the document with changes shown, applied, or rejected.
-- Everything is saved in the background, in this browser. Open **Settings** (⌘,) for fonts, themes, and your author name.
-
-> Comments, exports, and the edits library arrive in the next phases. See plan.md in the repo.
-`;
+/**
+ * The welcome text is Matt's own, kept as a file so it can be read and edited as a document:
+ * examples/welcome-to-shoulder-md/. Its history file beside it shows how it was written.
+ */
+export const WELCOME: string = welcomeText.trimEnd() + '\n';
 
 /**
  * Whether this is the welcome document exactly as the app created it: the same text and no

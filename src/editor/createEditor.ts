@@ -51,6 +51,8 @@ export type EditorBridge = {
   /** Top of the line containing `pos`, relative to the visible editor viewport; undefined if not rendered. */
   measureTop(pos: number): number | undefined;
   viewportHeight(): number;
+  /** Scrolls the document by `dy` pixels. */
+  scrollBy(dy: number): void;
   onScroll(cb: () => void): () => void;
   focus(): void;
   destroy(): void;
@@ -178,6 +180,9 @@ export function createEditor(opts: EditorOptions): EditorBridge {
         selection: EditorSelection.single(clamp(sel.anchor), clamp(sel.head)),
         scrollIntoView: scroll,
       });
+    },
+    scrollBy(dy) {
+      view.scrollDOM.scrollTop += dy;
     },
     measureTop(pos) {
       const coords = view.coordsAtPos(clamp(pos));

@@ -331,6 +331,7 @@
       <Margin
         {ws}
         measure={(pos) => editor?.measureTop(pos)}
+        onscrollby={(dy) => editor?.scrollBy(dy)}
         {tick}
         showTags={settings.value.showReasonTags}
         ontoggletags={(v) => settings.set('showReasonTags', v)}
