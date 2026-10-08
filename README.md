@@ -2,6 +2,8 @@
 
 By Matt Crump
 
+> **The web version is a demo.** The [browser version](https://crumplabsandbox.github.io/shoulder-md/) is there to try the editor. It is missing features of the Mac app, such as the Ask Claude and chat panels, which need Claude Code on your own machine. For the full app, build it from this repository (see [Mac app](#mac-app)).
+
 This is a markdown editor with tracked changes and more. It is also a personal experimental tool, built primarily with Claude Code, that may involve breaking changes across iterations.
 
 ## Reasons around my writing
@@ -66,10 +68,21 @@ A Markdown writing app with Word-style tracked changes and comments, on a senten
 
 The same app runs in its own window with Mac menus and direct folder access (no permission prompts):
 
+There is no download: you build the app on your own Mac. An app built on the machine that runs it opens without macOS security warnings, which a downloaded copy would not, since it is not signed with an Apple developer account.
+
+You need [Node.js](https://nodejs.org) 22 or later and git. In Terminal:
+
 ```sh
-pnpm app          # build and run
-pnpm app:build    # package release/mac-arm64/Shoulder.app
+git clone https://github.com/CrumpLabSandbox/shoulder-md.git
+cd shoulder-md
+corepack enable      # makes pnpm available; it comes with Node
+pnpm install
+pnpm app:build
 ```
+
+This makes `release/mac-arm64/Shoulder.app` (`release/mac/Shoulder.app` on an Intel Mac). Drag it to your Applications folder. To update later, run `git pull`, then `pnpm install` and `pnpm app:build` again, and replace the copy in Applications; your documents are kept outside the app and are not affected.
+
+To run it without packaging, `pnpm app` builds and opens it directly.
 
 #### Asking Claude from inside the Mac app
 
@@ -126,4 +139,6 @@ Pushes to `main` deploy to GitHub Pages via `.github/workflows/deploy.yml`.
 
 ### License
 
-MIT. Bundled fonts are under the SIL Open Font License.
+Shoulder is open source under the [MIT License](LICENSE), copyright Matt Crump.
+
+It is built on other open-source software and fonts, each under its own licence (mostly MIT, with the bundled fonts under the SIL Open Font License). They are listed with their copyright notices and licence texts in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), which also ships inside the Mac app. Run `pnpm notices` to regenerate it after changing dependencies.

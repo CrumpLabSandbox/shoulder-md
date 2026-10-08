@@ -18,6 +18,7 @@ pnpm app          # build, then run the Mac app (Electron) on the built files
 pnpm app:dev      # run the Mac app against a running `pnpm dev` server
 pnpm app:build    # package release/mac-arm64/Shoulder.app (ad-hoc signed, for this machine)
 pnpm icon build/icons/<name>.svg   # rebuild build/icon.icns and build/icon.png from an SVG
+pnpm notices      # regenerate THIRD_PARTY_NOTICES.md; run after adding or updating a dependency
 ```
 
 Run `pnpm format && pnpm lint && pnpm check && pnpm test && pnpm build` before every commit. All five must be clean.

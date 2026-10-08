@@ -19,7 +19,8 @@
     "app": "vite build && electron .",
     "app:dev": "SHOULDER_DEV_URL=http://localhost:5173 electron .",
     "app:build": "vite build && electron-builder --mac dir",
-    "icon": "node scripts/make-icon.mjs"
+    "icon": "node scripts/make-icon.mjs",
+    "notices": "node scripts/notices.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.8.1",
@@ -85,6 +86,8 @@
       "build/icon.png",
       ".claude/skills/**",
       "package.json",
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md",
       "!node_modules/**"
     ],
     "mac": {
@@ -95,7 +98,25 @@
       "identity": "-",
       "hardenedRuntime": false,
       "icon": "build/icon.icns"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "node_modules/electron/dist/LICENSE",
+        "to": "LICENSE.electron.txt"
+      },
+      {
+        "from": "node_modules/electron/dist/LICENSES.chromium.html",
+        "to": "LICENSES.chromium.html"
+      },
+      {
+        "from": "LICENSE",
+        "to": "LICENSE.txt"
+      },
+      {
+        "from": "THIRD_PARTY_NOTICES.md",
+        "to": "THIRD_PARTY_NOTICES.md"
+      }
+    ]
   },
   "author": "Matt Crump"
 }

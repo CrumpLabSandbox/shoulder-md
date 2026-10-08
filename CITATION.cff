@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: 'If you use this software, please cite it as below.'
+type: software
+title: 'Shoulder: a Markdown editor with tracked changes and reasons for edits'
+abstract: >-
+  A Markdown editor with Word-style tracked changes and comments, built on a
+  sentence-level model that records every edit and its reason. Runs in a
+  browser or as a Mac app.
+authors:
+  - family-names: Crump
+    given-names: Matthew J. C.
+    orcid: 'https://orcid.org/0000-0002-5612-0090'
+repository-code: 'https://github.com/CrumpLabSandbox/shoulder-md'
+license: MIT
+version: 0.0.1
+date-released: '2026-10-08'
+keywords:
+  - markdown
+  - tracked changes
+  - writing
+  - style guides

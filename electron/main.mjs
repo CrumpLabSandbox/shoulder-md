@@ -295,8 +295,8 @@ app.whenReady().then(async () => {
     applicationVersion: app.getVersion(),
     version: '',
     credits:
-      'A Markdown editor with tracked changes, reasons for every edit, and style guides that learn from how you write.',
-    copyright: 'Claude features run your own Claude Code, under its sign-in.',
+      'By Matt Crump\n\nA Markdown editor with tracked changes, reasons for every edit, and style guides that learn from how you write.\n\nClaude features run your own Claude Code, under its sign-in.',
+    copyright: 'Copyright © 2026 Matt Crump. Open source under the MIT License.',
   });
   // In development the Dock would otherwise show Electron's own icon.
   if (!app.isPackaged && app.dock) {

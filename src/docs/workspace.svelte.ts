@@ -42,7 +42,7 @@ import { downloadBlob, downloadText, slugify } from '../export/download';
 import { printDocument, printHtml } from '../export/print';
 import { createAutosave, type SaveStatus } from '../persist/autosave';
 import { displayTitle } from './title';
-import { WELCOME, isUntouchedWelcome } from './welcome';
+import { welcomeFor, isUntouchedWelcome } from './welcome';
 import { authorColor, CLAUDE_AUTHOR, DISK_AUTHOR } from './identity';
 import {
   alignRevision,
@@ -245,7 +245,8 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     if (target) {
       await open(target.id);
     } else {
-      const doc = await createDoc({ text: WELCOME, author: author.id, tracking: false });
+      const text = welcomeFor(!!appBridge());
+      const doc = await createDoc({ text, author: author.id, tracking: false });
       await refreshList();
       await open(doc.id);
     }

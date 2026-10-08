@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { WELCOME, isUntouchedWelcome } from '../src/docs/welcome';
+import {
+  WELCOME,
+  WEB_NOTE,
+  WEB_WELCOME,
+  isUntouchedWelcome,
+  welcomeFor,
+} from '../src/docs/welcome';
 import { appendOp, createDocument } from '../src/model/apply';
 import { absoluteToPos } from '../src/model/views';
 
@@ -36,5 +42,16 @@ describe('the welcome document', () => {
     expect(isUntouchedWelcome(createDocument({ text: WELCOME + '\nMore.', author: 'me' }))).toBe(
       false,
     );
+  });
+
+  it("carries a demo note in a browser, under the title, and is still the app's own", () => {
+    expect(welcomeFor(true)).toBe(WELCOME);
+    expect(welcomeFor(false)).toBe(WEB_WELCOME);
+    const lines = WEB_WELCOME.split('\n');
+    expect(lines[0]).toBe(WELCOME.split('\n')[0]);
+    expect(lines[2]).toBe(WEB_NOTE);
+    expect(WEB_WELCOME.replace(`\n${WEB_NOTE}\n`, '')).toBe(WELCOME);
+    const doc = createDocument({ id: 'w', text: WEB_WELCOME, author: 'me', ts: 't' });
+    expect(isUntouchedWelcome(doc)).toBe(true);
   });
 });
