@@ -36,6 +36,7 @@ import { docStats } from '../library/stats';
 import { changeRecords, toJsonl, type RecordOptions } from '../library/records';
 import type { DocMeta, MetaPatch } from '../model/types';
 import { exportCriticMarkup, exportMarkdown, documentFromCriticMarkup } from '../export/markdown';
+import type { DocxImage } from '../export/docx';
 import { exportJson, importJson } from '../export/json';
 import { downloadBlob, downloadText, slugify } from '../export/download';
 import { printDocument, printHtml } from '../export/print';
@@ -110,6 +111,8 @@ const sameLog = (a: Document, b: Document) =>
 
 /** Changes in a revision that are this few unchanged characters apart are shown as one. */
 const REVISION_JOIN = 24;
+/** Requests made from the principle inbox and Claude's summaries, kept like a document's chat. */
+const INBOX_LOG = 'inbox.chat.md';
 
 const LAST_DOC_KEY = 'shoulder-md:lastDoc';
 const UNDO_GROUP_MS = 500;
@@ -764,7 +767,8 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
         return downloadText(`${stem}.shoulder.json`, exportJson(doc), 'application/json');
       case 'docx': {
         const { exportDocx } = await import('../export/docx');
-        const blob = await exportDocx(doc, { authors, creator: author.name });
+        const images = await docxImages(revisionText(doc.state));
+        const blob = await exportDocx(doc, { authors, creator: author.name, images });
         return downloadBlob(`${stem}.docx`, blob);
       }
       case 'print-clean':
@@ -1432,6 +1436,30 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     }
   }
 
+  /** The document's images, read and measured, for the Word export. SVGs are left out. */
+  async function docxImages(text: string): Promise<Record<string, DocxImage>> {
+    const doc = current;
+    const out: Record<string, DocxImage> = {};
+    if (!doc) return out;
+    const sync = syncs[folderFor(doc.state.meta)];
+    const refs = [...text.matchAll(/!\[[^\]]*\]\((assets\/[^)\s]+)/g)].map((m) => decodeURI(m[1]!));
+    for (const ref of refs.filter((r, i) => refs.indexOf(r) === i)) {
+      const ext = ref.split('.').pop()?.toLowerCase() ?? '';
+      const type = ext === 'jpeg' ? 'jpg' : ext;
+      if (type !== 'png' && type !== 'jpg' && type !== 'gif' && type !== 'bmp') continue;
+      try {
+        const data = await sync?.asset(doc.id, ref);
+        if (!data) continue;
+        const bitmap = await createImageBitmap(new Blob([data]));
+        out[ref] = { data, type, width: bitmap.width, height: bitmap.height };
+        bitmap.close();
+      } catch {
+        // An image that cannot be read is exported as a note in its place.
+      }
+    }
+    return out;
+  }
+
   /** Rendered HTML with every `assets/…` image pointed at a URL the page can load. */
   async function withAssets(html: string): Promise<string> {
     const refs = [...html.matchAll(/<img\b[^>]*?\ssrc="(assets\/[^"]+)"/g)].map((m) => m[1]!);
@@ -1496,6 +1524,44 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
   }
 
   /**
+   * Keeps a one-shot request and Claude's closing summary in the saved conversation, so the
+   * file beside a document records everything Claude was asked about it, not only the chat.
+   * `doc` is the document or guide the request was about; the inbox has a file of its own.
+   */
+  async function recordRun(
+    doc: Document | undefined,
+    asked: string,
+    outcome: ClaudeEvent,
+    model?: string,
+  ): Promise<void> {
+    const request: ChatMessage = { role: 'you', text: asked };
+    const reply: ChatMessage = {
+      role: outcome.kind === 'error' ? 'error' : 'claude',
+      text: outcome.text || (outcome.kind === 'error' ? 'Something went wrong.' : 'Done.'),
+    };
+    const entries = chatEntry(request, nowIso()) + chatEntry(reply, nowIso(), model);
+    if (doc) {
+      await saveChat(doc, entries);
+      // A document's chat panel shows it too; guides have no chat panel.
+      if (!doc.state.meta.guide)
+        setChat(doc.id, (c) => ({ ...c, messages: [...c.messages, request, reply] }));
+      return;
+    }
+    const sync = syncs.shared;
+    if (!savingChats() || !sync) return;
+    try {
+      const existing = await sync.readAt(INBOX, INBOX_LOG);
+      await sync.writeAt(
+        INBOX,
+        INBOX_LOG,
+        (existing ?? chatHeader('the principle inbox')) + entries,
+      );
+    } catch (e) {
+      console.warn('shoulder-md: could not save the inbox conversation', e);
+    }
+  }
+
+  /**
    * Has the user's own Claude Code read the open document and its guides and write proposals
    * next to it (the propose-edits skill). The proposals then arrive through the folder poll.
    */
@@ -1526,7 +1592,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       if (run?.docId === doc.id && run.status === 'running' && e.kind === 'step')
         claudeRun = { ...run, steps: [...run.steps, e.text] };
     });
-    let outcome: { kind: string; text: string };
+    let outcome: ClaudeEvent;
     try {
       outcome = await bridge.claude.ask((sync.dir as NativeDir).nativePath, file, note, model);
     } catch (e) {
@@ -1540,6 +1606,13 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
         status: outcome.kind === 'error' ? 'error' : 'done',
         summary: outcome.text,
       };
+    const focus = note?.trim();
+    await recordRun(
+      doc,
+      `Asked Claude to suggest edits.${focus ? ` Note: ${focus}` : ''}`,
+      outcome,
+      model,
+    );
     void poll();
   }
 
@@ -1588,6 +1661,12 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
         status: outcome.kind === 'error' ? 'error' : 'done',
         summary: outcome.text,
       };
+    await recordRun(
+      doc,
+      `Asked Claude to draft principles from samples${all ? ', reading every sample again' : ''}.`,
+      outcome,
+      model,
+    );
     void poll();
   }
 
@@ -1696,6 +1775,12 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
         status: outcome.kind === 'error' ? 'error' : 'done',
         summary: outcome.text,
       };
+    await recordRun(
+      undefined,
+      `Asked Claude to suggest principles from my edits${all ? ', looking at every edit again' : ''}.`,
+      outcome,
+      model,
+    );
     await refreshInbox();
   }
 

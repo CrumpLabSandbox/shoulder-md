@@ -16,6 +16,7 @@ import {
   Document as DocxDocument,
   ExternalHyperlink,
   HeadingLevel,
+  ImageRun,
   InsertedTextRun,
   LevelFormat,
   Packer,
@@ -47,6 +48,8 @@ type CharStyle = {
   code: boolean;
   strike: boolean;
   link?: string;
+  /** On the first character of a Markdown image: what to put there instead of its text. */
+  image?: { url: string; alt: string };
 };
 
 const MARKERS = new Set([
@@ -98,6 +101,15 @@ function inlineStyles(text: string, kind: Block['kind']): CharStyle[] {
         case 'Strikethrough':
           set(node.from, node.to, (s) => (s.strike = true));
           break;
+        case 'Image': {
+          // The whole "![alt](url)" is replaced by the picture (or a note, if it is missing).
+          const url = node.node.getChild('URL');
+          const src = url ? text.slice(url.from, url.to) : '';
+          const alt = /^!\[([^\]]*)\]/.exec(text.slice(node.from, node.to))?.[1] ?? '';
+          set(node.from, node.to, (s) => (s.omit = true));
+          if (styles[node.from]) styles[node.from]!.image = { url: src, alt };
+          return false;
+        }
         case 'Link': {
           const url = node.node.getChild('URL');
           const href = url ? text.slice(url.from, url.to) : undefined;
@@ -196,7 +208,46 @@ type CommentPlan = {
   ranges: CommentRange[];
 };
 
-export type DocxOptions = { authors?: readonly Author[]; creator?: string };
+/** A picture to embed, already measured. Sizes are in pixels. */
+export type DocxImage = {
+  data: Uint8Array;
+  type: 'png' | 'jpg' | 'gif' | 'bmp';
+  width: number;
+  height: number;
+};
+
+export type DocxOptions = {
+  authors?: readonly Author[];
+  creator?: string;
+  /** Images by the path the Markdown uses for them (`assets/<name>`). */
+  images?: Record<string, DocxImage>;
+};
+
+/** The widest a picture is placed, in pixels (about the text width of a Letter or A4 page). */
+const MAX_IMAGE_WIDTH = 600;
+
+/** The picture for a Markdown image, scaled to fit the page, or a note when there is none. */
+function imageRun(image: { url: string; alt: string }, images: DocxOptions['images']) {
+  let key = image.url;
+  try {
+    key = decodeURIComponent(image.url);
+  } catch {
+    // keep the path as written
+  }
+  const found = images?.[key] ?? images?.[image.url];
+  if (!found || found.width <= 0 || found.height <= 0)
+    return new TextRun({ text: `[image: ${image.alt || image.url}]`, italics: true });
+  const scale = Math.min(1, MAX_IMAGE_WIDTH / found.width);
+  return new ImageRun({
+    type: found.type,
+    data: found.data,
+    transformation: {
+      width: Math.round(found.width * scale),
+      height: Math.round(found.height * scale),
+    },
+    altText: { title: image.alt, description: image.alt, name: image.alt || 'image' },
+  });
+}
 
 export async function exportDocx(doc: Document, opts: DocxOptions = {}): Promise<Blob> {
   const file = buildDocx(doc, opts);
@@ -359,6 +410,10 @@ export function buildDocx(doc: Document, opts: DocxOptions = {}): DocxDocument {
           const st = styles[rel]!;
           const ch = span.text[i]!;
           rel++;
+          if (st.image) {
+            flush();
+            runs.push(imageRun(st.image, opts.images));
+          }
           if (st.omit) continue;
           if (ch === '\n') {
             if (block.kind === 'code') {

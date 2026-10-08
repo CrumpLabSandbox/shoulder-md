@@ -108,4 +108,32 @@ describe('Word export of deleted insertions', () => {
       /<w:ins [^>]*w:author="Alice"[^>]*><w:r>(<w:rPr\/>)?<w:t[^>]*>Y<\/w:t>/,
     );
   });
+
+  it('embeds images kept beside the document, scaled to the page, and notes missing ones', async () => {
+    const h = harness(
+      '# Figures\n\nSee ![a red dot](assets/red%20dot.png) here.\n\n![gone](assets/missing.png)\n',
+    );
+    const png = Uint8Array.from(
+      atob(
+        'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP8z8Dwn4GBgYGJAQoAHxcCAr7B0H0AAAAASUVORK5CYII=',
+      ),
+      (c) => c.charCodeAt(0),
+    );
+    const out = await unzip(
+      await exportDocxBuffer(h.doc, {
+        images: { 'assets/red dot.png': { data: png, type: 'png', width: 1200, height: 600 } },
+      }),
+    );
+    const xml = out.document;
+    // One picture, 600 px wide (1200 scaled down) and 300 tall: 9525 EMU per pixel.
+    expect(xml.match(/<w:drawing>/g)).toHaveLength(1);
+    expect(xml).toContain('cx="5715000"');
+    expect(xml).toContain('cy="2857500"');
+    expect(Object.keys(out.zip.files).some((n) => /^word\/media\/.+\.png$/.test(n))).toBe(true);
+    // The Markdown for the image is gone; the text around it stays.
+    expect(xml).not.toContain('assets/red');
+    expect(xml).toContain('See ');
+    expect(xml).toContain(' here.');
+    expect(xml).toContain('[image: gone]');
+  });
 });
