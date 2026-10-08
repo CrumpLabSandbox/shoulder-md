@@ -63,6 +63,14 @@ export type AppBridge = {
   pickFolder(): Promise<{ path: string; name: string } | null>;
   fs: NativeFs;
   claude: ClaudeBridge;
+  /** Tells the menu what to mark: Track Changes, the current view and layout, open panels. */
+  setMenuState(state: {
+    tracking: boolean;
+    margin: boolean;
+    chat: boolean;
+    view: 'revision' | 'clean' | 'original';
+    layout: 'editor' | 'split' | 'preview';
+  }): void;
   /** Calls `handler` with each menu command; returns a function that stops listening. */
   onMenu(handler: (command: string) => void): () => void;
 };

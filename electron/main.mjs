@@ -1,11 +1,11 @@
 // The Mac app: a window around the same web build, with native menus and direct folder access.
 // The renderer stays sandboxed; it reaches the disk only through the handlers below, and only
 // inside folders the user picked.
-import { app, BrowserWindow, Menu, dialog, ipcMain, net, protocol, shell } from 'electron';
+import { app, BrowserWindow, Menu, dialog, ipcMain, net, protocol, screen, shell } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { menuTemplate } from './menu.mjs';
+import { checkedItems, menuTemplate } from './menu.mjs';
 import {
   askClaude,
   cancelClaude,
@@ -190,13 +190,54 @@ function registerClaudeHandlers() {
 
 const isOurs = (url) => url.startsWith(APP_URL) || (!!DEV_URL && url.startsWith(DEV_URL));
 
-function createWindow() {
+/* ---------- where the window was ---------- */
+
+const boundsFile = () => path.join(app.getPath('userData'), 'window.json');
+
+/** The last window position and size, if it is still on a connected display. */
+async function savedBounds() {
+  try {
+    const b = JSON.parse(await fs.readFile(boundsFile(), 'utf8'));
+    const ok = [b.x, b.y, b.width, b.height].every((n) => Number.isFinite(n));
+    if (!ok || b.width < 400 || b.height < 300) return undefined;
+    const area = screen.getDisplayMatching(b).workArea;
+    const visible =
+      b.x < area.x + area.width - 80 &&
+      b.x + b.width > area.x + 80 &&
+      b.y >= area.y - 10 &&
+      b.y < area.y + area.height - 80;
+    return visible ? b : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function rememberBounds(win) {
+  let timer;
+  const save = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (win.isDestroyed() || win.isFullScreen() || win.isMinimized()) return;
+      void fs.writeFile(boundsFile(), JSON.stringify(win.getNormalBounds())).catch(() => {});
+    }, 400);
+  };
+  win.on('resize', save);
+  win.on('move', save);
+  win.on('close', () => {
+    clearTimeout(timer);
+    if (!win.isFullScreen() && !win.isMinimized())
+      void fs.writeFile(boundsFile(), JSON.stringify(win.getNormalBounds())).catch(() => {});
+  });
+}
+
+async function createWindow() {
   const win = new BrowserWindow({
     width: 1360,
     height: 880,
+    ...((await savedBounds()) ?? {}),
     minWidth: 760,
     minHeight: 480,
-    title: 'shoulder-md',
+    title: 'Shoulder',
     webPreferences: {
       preload: path.join(here, 'preload.cjs'),
       contextIsolation: true,
@@ -204,6 +245,7 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+  rememberBounds(win);
   // Links in documents and previews open in the browser, never inside the app window.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) void shell.openExternal(url);
@@ -222,7 +264,7 @@ function createWindow() {
 function send(command) {
   const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
   if (win) win.webContents.send('menu', command);
-  else createWindow().webContents.once('did-finish-load', () => send(command));
+  else void createWindow().then((w) => w.webContents.once('did-finish-load', () => send(command)));
 }
 
 app.whenReady().then(async () => {
@@ -237,9 +279,36 @@ app.whenReady().then(async () => {
   registerFolderHandlers();
   registerClaudeHandlers();
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate(send, app.name)));
-  createWindow();
+  // The page reports its state so Track Changes, the view and the layout show their marks.
+  ipcMain.on('menu:state', (_e, state) => {
+    const menu = Menu.getApplicationMenu();
+    for (const [id, checked] of Object.entries(checkedItems(state ?? {}))) {
+      const item = menu?.getMenuItemById(id);
+      if (!item) continue;
+      // A radio item is selected by checking it; assigning false to one selects it too.
+      if (item.type !== 'radio') item.checked = checked;
+      else if (checked) item.checked = true;
+    }
+  });
+  app.setAboutPanelOptions({
+    applicationName: 'Shoulder',
+    applicationVersion: app.getVersion(),
+    version: '',
+    credits:
+      'A Markdown editor with tracked changes, reasons for every edit, and style guides that learn from how you write.',
+    copyright: 'Claude features run your own Claude Code, under its sign-in.',
+  });
+  // In development the Dock would otherwise show Electron's own icon.
+  if (!app.isPackaged && app.dock) {
+    try {
+      app.dock.setIcon(path.join(here, '..', 'build', 'icon.png'));
+    } catch {
+      // no icon built yet
+    }
+  }
+  await createWindow();
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) void createWindow();
   });
 });
 

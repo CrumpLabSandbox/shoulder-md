@@ -6,7 +6,7 @@ import { MENU_COMMANDS, inTextField, runMenuCommand, type MenuActions } from '..
 import type { NativeFs } from '../src/app/bridge';
 import { harness } from './helpers/model';
 // The menu is plain data built by the main process; it has no Electron imports of its own.
-import { menuTemplate } from '../electron/menu.mjs';
+import { checkedItems, menuTemplate } from '../electron/menu.mjs';
 
 /** A stand-in for the main process's file handlers: one folder of files in memory. */
 function fakeDisk() {
@@ -109,6 +109,31 @@ describe('menu commands', () => {
     walk(menuTemplate((c: string) => sent.push(c), 'Shoulder') as never);
     expect(sent).toEqual(ids);
     expect([...ids].sort()).toEqual([...MENU_COMMANDS].sort());
+  });
+
+  it('marks the items that show state, and only items that exist', () => {
+    const marks = checkedItems({
+      tracking: true,
+      margin: false,
+      chat: true,
+      view: 'clean',
+      layout: 'split',
+    });
+    expect(
+      Object.entries(marks)
+        .filter(([, on]) => on)
+        .map(([id]) => id)
+        .sort(),
+    ).toEqual(['chat', 'layout:split', 'tracking', 'view:clean']);
+    const typed: Record<string, string | undefined> = {};
+    const walk = (items: { id?: string; type?: string; submenu?: unknown }[]) => {
+      for (const it of items) {
+        if (it.id) typed[it.id] = it.type;
+        if (Array.isArray(it.submenu)) walk(it.submenu as never);
+      }
+    };
+    walk(menuTemplate(() => {}, 'Shoulder') as never);
+    for (const id of Object.keys(marks)) expect(typed[id]).toMatch(/^(checkbox|radio)$/);
   });
 
   it('runs known commands and ignores unknown ones', () => {

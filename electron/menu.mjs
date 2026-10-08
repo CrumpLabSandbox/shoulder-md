@@ -3,12 +3,16 @@
 
 /** @param {(command: string) => void} send  @param {string} appName */
 export function menuTemplate(send, appName) {
-  const item = (label, command, accelerator) => ({
+  const item = (label, command, accelerator, type) => ({
     id: command,
     label,
     ...(accelerator ? { accelerator } : {}),
+    ...(type ? { type } : {}),
     click: () => send(command),
   });
+  // Items that show the app's current state; main.mjs keeps their marks in step with the page.
+  const check = (label, command, accelerator) => item(label, command, accelerator, 'checkbox');
+  const radio = (label, command, accelerator) => item(label, command, accelerator, 'radio');
   const sep = { type: 'separator' };
   return [
     {
@@ -73,15 +77,15 @@ export function menuTemplate(send, appName) {
     {
       label: 'View',
       submenu: [
-        item('Markup', 'view:revision'),
-        item('Clean', 'view:clean'),
-        item('Original', 'view:original'),
+        radio('Markup', 'view:revision'),
+        radio('Clean', 'view:clean'),
+        radio('Original', 'view:original'),
         sep,
-        item('Write', 'layout:editor'),
-        item('Split', 'layout:split', 'Shift+Cmd+E'),
-        item('Preview', 'layout:preview', 'Cmd+E'),
+        radio('Write', 'layout:editor'),
+        radio('Split', 'layout:split', 'Shift+Cmd+E'),
+        radio('Preview', 'layout:preview', 'Cmd+E'),
         sep,
-        item('Changes and Comments', 'margin', 'Alt+Cmd+M'),
+        check('Changes and Comments', 'margin', 'Alt+Cmd+M'),
         sep,
         { role: 'togglefullscreen' },
         { role: 'reload' },
@@ -91,7 +95,7 @@ export function menuTemplate(send, appName) {
     {
       label: 'Changes',
       submenu: [
-        item('Track Changes', 'tracking', 'Alt+Cmd+T'),
+        check('Track Changes', 'tracking', 'Alt+Cmd+T'),
         sep,
         item('Accept Change', 'accept', 'Alt+Cmd+A'),
         item('Reject Change', 'reject', 'Alt+Cmd+R'),
@@ -102,7 +106,7 @@ export function menuTemplate(send, appName) {
         item('Reject All Changes', 'reject-all'),
         sep,
         item('Ask Claude to Suggest Edits…', 'ask-claude', 'Alt+Cmd+K'),
-        item('Chat with Claude', 'chat', 'Alt+Cmd+J'),
+        check('Chat with Claude', 'chat', 'Alt+Cmd+J'),
         item('Draft Principles from Samples…', 'draft-principles'),
         item('Principle Inbox', 'inbox'),
         sep,
@@ -112,4 +116,19 @@ export function menuTemplate(send, appName) {
     },
     { role: 'windowMenu' },
   ];
+}
+
+/** The ids of items that carry a mark, given the page's state. */
+export function checkedItems(state) {
+  return {
+    tracking: !!state.tracking,
+    margin: !!state.margin,
+    chat: !!state.chat,
+    'view:revision': state.view === 'revision',
+    'view:clean': state.view === 'clean',
+    'view:original': state.view === 'original',
+    'layout:editor': state.layout === 'editor',
+    'layout:split': state.layout === 'split',
+    'layout:preview': state.layout === 'preview',
+  };
 }

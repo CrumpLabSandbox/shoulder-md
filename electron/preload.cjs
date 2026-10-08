@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('shoulderApp', {
       return () => ipcRenderer.removeListener('claude:event', listener);
     },
   },
+  setMenuState: (state) => ipcRenderer.send('menu:state', state),
   onMenu: (handler) => {
     const listener = (_event, command) => handler(command);
     ipcRenderer.on('menu', listener);

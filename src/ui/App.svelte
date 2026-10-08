@@ -29,7 +29,7 @@
 
   let docsOpen = $state(false);
   let settingsOpen = $state(false);
-  let marginOpen = $state(true);
+  let marginOpen = $state(settings.value.marginOpen);
   let libraryOpen = $state(false);
   let editor: Editor | undefined = $state();
   let tick = $state(0);
@@ -159,7 +159,25 @@
   let importInput: HTMLInputElement | undefined = $state();
   let imageInput: HTMLInputElement | undefined = $state();
   let claudeOpen = $state(false);
-  let chatOpen = $state(false);
+  let chatOpen = $state(settings.value.chatOpen);
+
+  // Remember which panels were open, and keep the window title and the menu's marks current.
+  $effect(() => {
+    if (settings.value.marginOpen !== marginOpen) settings.set('marginOpen', marginOpen);
+    if (settings.value.chatOpen !== chatOpen) settings.set('chatOpen', chatOpen);
+  });
+  $effect(() => {
+    document.title = ws.ready && ws.current ? `${ws.title} — Shoulder` : 'Shoulder';
+  });
+  $effect(() => {
+    appBridge()?.setMenuState({
+      tracking: ws.trackingOn,
+      margin: marginOpen,
+      chat: chatOpen,
+      view: ws.view,
+      layout,
+    });
+  });
   const inApp = !!appBridge();
 
   function focusReason() {

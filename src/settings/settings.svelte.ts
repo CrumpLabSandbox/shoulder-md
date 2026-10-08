@@ -23,6 +23,9 @@ export type Settings = {
   claudeModel: ClaudeModel;
   /** Save each document's conversation with Claude next to it, as part of its history. */
   saveChats: boolean;
+  /** Panels left open, remembered between launches. */
+  marginOpen: boolean;
+  chatOpen: boolean;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -39,6 +42,8 @@ export const DEFAULT_SETTINGS: Settings = {
   libraryDefault: false,
   claudeModel: '',
   saveChats: true,
+  marginOpen: true,
+  chatOpen: false,
 };
 
 export type Preset = {
@@ -154,6 +159,8 @@ export function sanitize(s: Settings): Settings {
     libraryDefault: typeof s.libraryDefault === 'boolean' ? s.libraryDefault : false,
     claudeModel: CLAUDE_MODELS.some((m) => m.id === s.claudeModel) ? s.claudeModel : '',
     saveChats: typeof s.saveChats === 'boolean' ? s.saveChats : true,
+    marginOpen: typeof s.marginOpen === 'boolean' ? s.marginOpen : true,
+    chatOpen: typeof s.chatOpen === 'boolean' ? s.chatOpen : false,
   };
 }
 

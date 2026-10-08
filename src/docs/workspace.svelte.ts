@@ -41,6 +41,7 @@ import { downloadBlob, downloadText, slugify } from '../export/download';
 import { printDocument, printHtml } from '../export/print';
 import { createAutosave, type SaveStatus } from '../persist/autosave';
 import { displayTitle } from './title';
+import { WELCOME, isUntouchedWelcome } from './welcome';
 import { authorColor, CLAUDE_AUTHOR, DISK_AUTHOR } from './identity';
 import {
   alignRevision,
@@ -128,19 +129,6 @@ export type ExternalChange = {
   docId: string;
   ext: Exclude<External, { kind: 'none' } | { kind: 'missing' }>;
 };
-
-const WELCOME = `# Welcome to shoulder-md
-
-A Markdown editor with Word-style **tracked changes**. Underneath, every edit is recorded as an operation on a sentence-level model, so nothing about a document's editing history is lost.
-
-- Turn on **Track changes** in the toolbar (⌘⌥T) and edit this paragraph: deletions stay struck through, insertions are underlined, and a card appears in the margin.
-- Accept or reject a change from its card, or with ⌘⌥A and ⌘⌥R while the cursor is in it. ⌘⌥N and ⌘⌥P jump between changes.
-- Add a reason to a change from its card. Reasons are the point: the library of edits with reasons is what will teach Claude to edit like you.
-- Switch between **Markup**, **Clean**, and **Original** views to see the document with changes shown, applied, or rejected.
-- Everything is saved in the background, in this browser. Open **Settings** (⌘,) for fonts, themes, and your author name.
-
-> Comments, exports, and the edits library arrive in the next phases. See plan.md in the repo.
-`;
 
 /** `from` is the index of the first op in `doc.ops` that still has to be written. */
 type SaveBatch = { doc: Document; from: number; force: boolean };
@@ -896,6 +884,8 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
 
   /** Writes one document to its folder (moving it out of the other), or records an outside change. */
   async function syncDoc(doc: Document, force = false): Promise<void> {
+    // The welcome document is the app's own until someone edits it: it stays out of the folder.
+    if (isUntouchedWelcome(doc)) return;
     const kind = folderFor(doc.state.meta);
     const other: FolderKind = kind === 'shared' ? 'private' : 'shared';
     const otherSync = syncs[other];
@@ -960,9 +950,15 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
         docs.map((d) => d.id),
         await getTombstones(),
       );
+      const before = docs.map((d) => d.id);
       for (const d of found) await importDocument(d);
       if (found.length) {
         await refreshList();
+        // Real documents have arrived: this install's own untouched welcome is no longer needed.
+        for (const id of before) {
+          const doc = current?.id === id ? current : (await loadDoc(id))?.doc;
+          if (doc && isUntouchedWelcome(doc)) await remove(id);
+        }
         folderNotice = `Added ${found.length} ${found.length === 1 ? 'document' : 'documents'} from “${handle.name}”.`;
       }
       await writeAll();

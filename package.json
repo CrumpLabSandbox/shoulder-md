@@ -18,7 +18,8 @@
     "test:watch": "vitest",
     "app": "vite build && electron .",
     "app:dev": "SHOULDER_DEV_URL=http://localhost:5173 electron .",
-    "app:build": "vite build && electron-builder --mac dir"
+    "app:build": "vite build && electron-builder --mac dir",
+    "icon": "node scripts/make-icon.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.8.1",
@@ -81,6 +82,7 @@
     "files": [
       "dist/**",
       "electron/**",
+      "build/icon.png",
       ".claude/skills/**",
       "package.json",
       "!node_modules/**"
@@ -91,7 +93,8 @@
         "dir"
       ],
       "identity": "-",
-      "hardenedRuntime": false
+      "hardenedRuntime": false,
+      "icon": "build/icon.icns"
     }
   },
   "author": "Matt Crump"
