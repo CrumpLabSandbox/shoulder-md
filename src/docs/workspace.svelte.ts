@@ -19,7 +19,13 @@ import {
 } from '../persist/idb';
 import { FolderSync, type Asset, type External } from '../folder/sync';
 import { folderSupported, permissionOf, pickFolder, type DirHandleLike } from '../folder/fs';
-import { reviveHandle, sameNativeFolder, storableHandle, type NativeDir } from '../folder/native';
+import {
+  nativeDir,
+  reviveHandle,
+  sameNativeFolder,
+  storableHandle,
+  type NativeDir,
+} from '../folder/native';
 import { appBridge, type AppBridge, type ClaudeEvent } from '../app/bridge';
 import { cleanToRevision, editsToMatch, type OpBuilder } from '../folder/merge';
 import {
@@ -119,6 +125,12 @@ const UNDO_GROUP_MS = 500;
 const UNDO_LIMIT = 500;
 const FOLDER_WRITE_MS = 800;
 const FOLDER_POLL_MS = 2000;
+/** Git sync (git-sync.md §4): pull this often, push this long after the last folder write. */
+const GIT_PULL_MS = 5 * 60_000;
+const GIT_PUSH_MS = 30_000;
+const GIT_FOCUS_MS = 60_000;
+const GIT_PAUSED_KEY = 'shoulder-md:git-paused:';
+const GIT_OFFER_KEY = 'shoulder-md:git-offer-dismissed';
 
 export type FolderStatus =
   | { status: 'unsupported' }
@@ -126,6 +138,21 @@ export type FolderStatus =
   | { status: 'needs-permission'; name: string }
   | { status: 'connected'; name: string; lastWrite?: number }
   | { status: 'error'; name: string; error: string };
+
+/** Whether the shared folder syncs through git, and how the last sync went. */
+export type GitState =
+  | { status: 'unavailable' }
+  | { status: 'off'; gitMissing?: boolean }
+  | { status: 'paused'; remote?: string }
+  | {
+      status: 'on';
+      remote?: string;
+      syncing: boolean;
+      lastSync?: number;
+      error?: string;
+      /** Changes written since the last push. */
+      unpushed: boolean;
+    };
 
 /** A change on disk the user has to decide about. */
 export type ExternalChange = {
@@ -910,6 +937,8 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     }
     const target = syncs[kind];
     if (!target || !isConnected(kind)) return;
+    // Git is reading and writing the folder: write once it has finished.
+    if (kind === 'shared' && gitRun) await gitRun;
     if (!force && external?.docId === doc.id) return; // waiting for the user to decide
     try {
       const r = await target.write(doc, { force });
@@ -927,6 +956,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       }
       const f = folders[kind];
       if (r.written && f.status === 'connected') setFolder(kind, { ...f, lastWrite: Date.now() });
+      if (r.written && kind === 'shared') scheduleGitPush();
     } catch (e) {
       folderFailed(kind, e);
     }
@@ -935,6 +965,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
   function folderFailed(kind: FolderKind, e: unknown) {
     const name = folderName(kind);
     syncs[kind] = undefined;
+    if (kind === 'shared') stopGit();
     if (!syncs.shared && !syncs.private) stopPolling();
     setFolder(
       kind,
@@ -969,6 +1000,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       await writeAll();
       void restoreChat(current);
       startPolling();
+      if (kind === 'shared') void refreshGit();
     } catch (e) {
       folderFailed(kind, e);
     }
@@ -1064,6 +1096,7 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
   async function disconnectFolder(kind: FolderKind = 'shared'): Promise<void> {
     await folderWriter.flush();
     syncs[kind] = undefined;
+    if (kind === 'shared') stopGit();
     if (!syncs.shared && !syncs.private) stopPolling();
     if (kind === folderFor(current?.state.meta ?? {})) external = undefined;
     await setFolderRoot(undefined, kind);
@@ -1090,7 +1123,8 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
   /** Looks for outside changes to the open document's files, in whichever folder holds it. */
   async function poll(): Promise<void> {
     const doc = current;
-    if (!doc || external || polling) return;
+    // While git syncs, files change under it; what it brought in is taken in afterwards.
+    if (!doc || external || polling || gitRun) return;
     const kind = folderFor(doc.state.meta);
     const sync = syncs[kind];
     if (!sync || !isConnected(kind)) return;
@@ -2093,6 +2127,233 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
     if (current) await syncDoc(current, true);
   }
 
+  /* ---------- git sync (git-sync.md) ---------- */
+
+  let git = $state.raw<GitState>({ status: 'unavailable' });
+  /** The sync in progress; folder writes and polling wait for it. Never rejects. */
+  let gitRun: Promise<void> | undefined;
+  let gitPullTimer: ReturnType<typeof setInterval> | undefined;
+  let gitPushTimer: ReturnType<typeof setTimeout> | undefined;
+  let gitAttempt = 0;
+  let gitOfferDismissed = $state(safeGet(GIT_OFFER_KEY) === '1');
+  let gitSetupOpen = $state(false);
+
+  /** The shared folder's path, when it is a folder on this Mac (the app, not a browser). */
+  function sharedPath(): string | undefined {
+    const sync = syncs.shared;
+    if (!sync || !isConnected('shared') || !('nativePath' in sync.dir)) return undefined;
+    return (sync.dir as NativeDir).nativePath;
+  }
+
+  /** Looks at the shared folder again: is it a repository, is sync paused here, then syncs. */
+  async function refreshGit(): Promise<void> {
+    const bridge = appBridge();
+    const dir = sharedPath();
+    if (!bridge?.git || !dir) return stopGit();
+    try {
+      const s = await bridge.git.status(dir);
+      if (!s.available) git = { status: 'off', gitMissing: true };
+      else if (!s.repo) git = { status: 'off' };
+      else if (safeGet(GIT_PAUSED_KEY + dir) === '1') git = { status: 'paused', remote: s.remote };
+      else {
+        git = { status: 'on', remote: s.remote, syncing: false, unpushed: !!s.dirty };
+        startGitTimers();
+        await syncGit();
+      }
+    } catch (e) {
+      git = { status: 'off' };
+      console.warn('shoulder-md: could not read git status', e);
+    }
+  }
+
+  function startGitTimers() {
+    stopGitTimers();
+    gitPullTimer = setInterval(() => void syncGit(), GIT_PULL_MS);
+    globalThis.addEventListener?.('focus', onGitFocus);
+  }
+
+  function stopGitTimers() {
+    if (gitPullTimer) clearInterval(gitPullTimer);
+    if (gitPushTimer) clearTimeout(gitPushTimer);
+    gitPullTimer = gitPushTimer = undefined;
+    globalThis.removeEventListener?.('focus', onGitFocus);
+  }
+
+  function stopGit() {
+    stopGitTimers();
+    git = { status: 'unavailable' };
+  }
+
+  function onGitFocus() {
+    if (Date.now() - gitAttempt >= GIT_FOCUS_MS) void syncGit();
+  }
+
+  function scheduleGitPush() {
+    if (git.status !== 'on') return;
+    if (!git.unpushed) git = { ...git, unpushed: true };
+    if (gitPushTimer) clearTimeout(gitPushTimer);
+    gitPushTimer = setTimeout(() => void syncGit(), GIT_PUSH_MS);
+  }
+
+  /**
+   * One sync: write out what is pending, let git commit, pull and push, then take in what
+   * the other Macs changed. Concurrent calls share the run in progress.
+   */
+  function syncGit(): Promise<void> {
+    if (gitRun) return gitRun;
+    const bridge = appBridge();
+    const dir = sharedPath();
+    if (!bridge?.git || !dir || git.status !== 'on') return Promise.resolve();
+    gitAttempt = Date.now();
+    if (gitPushTimer) clearTimeout(gitPushTimer);
+    gitPushTimer = undefined;
+    const run = (async () => {
+      await autosave.flush();
+      await folderWriter.flush();
+      if (git.status === 'on') git = { ...git, syncing: true };
+      let r: Awaited<ReturnType<typeof bridge.git.sync>>;
+      try {
+        r = await bridge.git.sync(dir);
+      } catch (e) {
+        r = { ok: false, reason: 'other', error: e instanceof Error ? e.message : String(e) };
+      }
+      if (git.status !== 'on') return;
+      if (r.ok) {
+        git = { ...git, syncing: false, lastSync: Date.now(), error: undefined, unpushed: false };
+        const copies = r.conflicts.filter((c) => c.copy).map((c) => c.copy!.split('/').pop());
+        const taken = r.changed.length ? await absorbPulled() : 0;
+        if (copies.length)
+          folderNotice = `This Mac and another both changed the same files. This Mac’s version was kept, and the other was saved beside it as ${copies.join(' and ')}.`;
+        else if (taken)
+          folderNotice = `Brought in changes to ${taken} ${taken === 1 ? 'document' : 'documents'} from your other Mac.`;
+      } else if (r.reason === 'busy') {
+        // Claude is working in the folder: try again shortly, quietly.
+        git = { ...git, syncing: false };
+        gitPushTimer = setTimeout(() => void syncGit(), GIT_PUSH_MS);
+      } else {
+        git = { ...git, syncing: false, error: r.error };
+      }
+    })();
+    gitRun = run.finally(() => (gitRun = undefined));
+    return gitRun;
+  }
+
+  /**
+   * Takes in documents another Mac changed or added, after a pull. A document this Mac has not
+   * changed since its files were written takes the pulled version; one changed here too keeps
+   * this Mac's version, and its next write keeps the other as a conflict copy. Edits to a
+   * document's .md alone are offered as tracked changes when it is opened, as before.
+   */
+  async function absorbPulled(): Promise<number> {
+    const sync = syncs.shared;
+    if (!sync) return 0;
+    let taken = 0;
+    const known = docs;
+    const found = await sync.scan(
+      known.map((d) => d.id),
+      await getTombstones(),
+    );
+    for (const d of found) await importDocument(d);
+    taken += found.length;
+    for (const d of known) {
+      if (folderFor(d) !== 'shared') continue;
+      const isOpen = current?.id === d.id;
+      const doc = isOpen ? current : (await loadDoc(d.id))?.doc;
+      if (!doc) continue;
+      const ext = await sync.check(doc);
+      if (ext.kind !== 'json' || !(await sync.unchangedSinceWrite(doc))) continue;
+      if (isOpen && ext.extendsLocal) {
+        applyModelOps(ext.doc.ops.slice(doc.ops.length));
+        // Undo steps were recorded against the text before these changes.
+        undoStack = [];
+        redoStack = [];
+        canUndo = canRedo = false;
+        await autosave.flush();
+        if (current) await sync.acknowledge(current);
+      } else {
+        if (isOpen) {
+          await autosave.flush();
+          current = undefined;
+        }
+        await deleteDoc(d.id);
+        await importDocument(ext.doc);
+        await sync.acknowledge(ext.doc);
+        if (isOpen) {
+          await refreshList();
+          await open(d.id);
+          version++;
+        }
+      }
+      taken++;
+    }
+    if (taken) await refreshList();
+    return taken;
+  }
+
+  /**
+   * Connects the shared folder to a repository (git-sync.md §6). Returns what the setup screen
+   * shows next: done, a choice to make, or an error.
+   */
+  async function setupGit(
+    url: string,
+    opts: { rename?: boolean; combine?: boolean } = {},
+  ): Promise<{ ok: true; notice?: string } | { ok: false; needsChoice?: boolean; error?: string }> {
+    const bridge = appBridge();
+    const dir = sharedPath();
+    if (!bridge?.git || !dir) return { ok: false, error: 'Choose a shared folder first.' };
+    await park();
+    await writeAll();
+    const r = await bridge.git.setup(dir, url.trim(), opts);
+    if (!r.ok)
+      return 'needsChoice' in r ? { ok: false, needsChoice: true } : { ok: false, error: r.error };
+    safeSet(GIT_PAUSED_KEY + r.folder, '');
+    if (r.folder !== dir) {
+      const handle = nativeDir(r.folder, r.name, bridge.fs);
+      await setFolderRoot(
+        { handle: storableHandle(handle) as DirHandleLike, name: r.name, connectedAt: nowIso() },
+        'shared',
+      );
+      await activate('shared', handle);
+    } else if (r.cloned) {
+      const root = await storedRoot('shared');
+      if (root) await activate('shared', root.handle);
+    } else {
+      await refreshGit();
+    }
+    const notes: string[] = [];
+    if (r.renameSkipped)
+      notes.push(
+        `The folder was not renamed: a folder called “${r.renameSkipped}” already exists next to it.`,
+      );
+    if (r.conflicts?.some((c) => c.copy))
+      notes.push(
+        'Some files were on both sides with different contents; the repository’s versions were saved beside them as conflict copies.',
+      );
+    return { ok: true, ...(notes.length ? { notice: notes.join(' ') } : {}) };
+  }
+
+  /** Stops syncing on this Mac (the folder and its git history stay as they are). */
+  function pauseGit() {
+    const dir = sharedPath();
+    if (!dir || git.status !== 'on') return;
+    safeSet(GIT_PAUSED_KEY + dir, '1');
+    void appBridge()?.git.stop(dir);
+    stopGitTimers();
+    git = { status: 'paused', remote: git.remote };
+  }
+
+  function resumeGit() {
+    const dir = sharedPath();
+    if (!dir) return;
+    safeSet(GIT_PAUSED_KEY + dir, '');
+    void refreshGit();
+  }
+
+  function dismissGitOffer() {
+    gitOfferDismissed = true;
+    safeSet(GIT_OFFER_KEY, '1');
+  }
+
   /* ---------- style guides, genres and Claude access ---------- */
 
   const baseGuide = $derived(docs.find((d) => d.guide?.role === 'base'));
@@ -2633,6 +2894,26 @@ export function createWorkspace(initialAuthor: Author, options: WorkspaceOptions
       return folderNotice;
     },
     clearFolderNotice: () => (folderNotice = undefined),
+    get git() {
+      return git;
+    },
+    /** Whether to offer git sync: the app, a shared folder that does not sync, not dismissed. */
+    get gitOffer() {
+      return git.status === 'off' && !git.gitMissing && !gitOfferDismissed;
+    },
+    get gitSetupOpen() {
+      return gitSetupOpen;
+    },
+    openGitSetup: () => {
+      if (sharedPath()) gitSetupOpen = true;
+      else void connectFolder('shared').then(() => (gitSetupOpen = !!sharedPath()));
+    },
+    closeGitSetup: () => (gitSetupOpen = false),
+    setupGit,
+    syncGit,
+    pauseGit,
+    resumeGit,
+    dismissGitOffer,
     connectFolder,
     reconnectFolder,
     disconnectFolder,

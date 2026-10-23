@@ -622,6 +622,35 @@ export class FolderSync {
     await this.put(rec.folder, rec.base + CHAT_EXT, (existing ?? header) + addition);
   }
 
+  /** Whether the document has not changed here since its files were last written. */
+  async unchangedSinceWrite(doc: Document): Promise<boolean> {
+    const rec = await this.store.get(doc.id);
+    return (
+      !!rec &&
+      rec.opCount === doc.ops.length &&
+      (rec.stamp === undefined || rec.stamp === doc.updatedAt)
+    );
+  }
+
+  /**
+   * Records the files on disk as this document's own, as if just written: used after taking
+   * in a version that arrived from elsewhere (git sync), so it is not written straight back.
+   */
+  async acknowledge(doc: Document): Promise<void> {
+    const rec = await this.store.get(doc.id);
+    if (!rec) return;
+    const json = await this.fileAt(rec.folder, rec.base + JSON_EXT);
+    const md = await this.fileAt(rec.folder, rec.base + MD);
+    await this.store.put({
+      ...rec,
+      ...(json ? { json: statOf(await json.getFile()) } : {}),
+      ...(md ? { md: statOf(await md.getFile()) } : {}),
+      opCount: doc.ops.length,
+      stamp: doc.updatedAt,
+      writtenAt: this.now().toISOString(),
+    });
+  }
+
   /** Whether this folder holds (or last held) the document's files. */
   async has(docId: string): Promise<boolean> {
     return !!(await this.store.get(docId));

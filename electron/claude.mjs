@@ -24,7 +24,7 @@ const run = (file, args, opts = {}) =>
 
 let shellPath;
 /** The PATH of a login shell. An app started from the Finder gets a bare one, without node. */
-async function loginPath() {
+export async function loginPath() {
   if (shellPath === undefined) {
     const out = await run(process.env.SHELL || '/bin/zsh', ['-lic', 'echo "__PATH__$PATH"']);
     shellPath = /__PATH__(.*)/.exec(out)?.[1] || process.env.PATH || '';
@@ -77,6 +77,9 @@ async function installSkills(skillsSource, folder) {
 }
 
 let running;
+
+/** Whether Claude Code is working in a folder right now (git sync waits for it). */
+export const claudeBusy = () => !!running;
 
 /**
  * Runs Claude Code once in `folder` with the given arguments, reporting progress through

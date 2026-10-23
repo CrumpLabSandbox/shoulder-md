@@ -20,6 +20,7 @@
   import ClaudePanel from './ClaudePanel.svelte';
   import ChatPanel from './ChatPanel.svelte';
   import GuideBanner from './GuideBanner.svelte';
+  import GitSetup from './GitSetup.svelte';
 
   const settings = createSettingsStore();
   const ws = createWorkspace(loadAuthor(), {
@@ -122,6 +123,8 @@
     save: () => void ws.flush(),
     folder: () => void ws.connectFolder('shared'),
     'folder-private': () => void ws.connectFolder('private'),
+    'git-setup': () => ws.openGitSetup(),
+    'git-sync': () => void ws.syncGit(),
     'export:md-clean': () => void ws.exportAs('md-clean'),
     'export:md-original': () => void ws.exportAs('md-original'),
     'export:md-critic': () => void ws.exportAs('md-critic'),
@@ -448,6 +451,23 @@
     </div>
   {/if}
 
+  {#if ws.gitOffer && inApp && ws.ready}
+    <div class="notice external" role="status">
+      <span
+        >Use this folder on your other Macs too? Shoulder can sync it through a private git
+        repository.</span
+      >
+      <span class="actions">
+        <button class="primary" onclick={() => ws.openGitSetup()}>Set Up Sync…</button>
+        <button onclick={() => ws.dismissGitOffer()}>Not Now</button>
+      </span>
+    </div>
+  {/if}
+
+  {#if ws.gitSetupOpen}
+    <GitSetup {ws} onclose={() => ws.closeGitSetup()} />
+  {/if}
+
   {#if ws.folderNotice}
     <div class="notice" role="status">
       <span>{ws.folderNotice}</span>
@@ -472,6 +492,11 @@
     onreconnect={() => void ws.reconnectFolder()}
     privateFolder={ws.privateFolder}
     onreconnectprivate={() => void ws.reconnectFolder('private')}
+    git={ws.git}
+    ongit={() => {
+      if (ws.git.status === 'on' && !ws.git.error) void ws.syncGit();
+      else libraryOpen = true;
+    }}
   />
 </div>
 

@@ -2,7 +2,7 @@
   import type { SaveStatus } from '../persist/autosave';
   import { countWords } from '../preview/render';
   import { formatTime } from '../util/time';
-  import type { FolderStatus } from '../docs/workspace.svelte';
+  import type { FolderStatus, GitState } from '../docs/workspace.svelte';
 
   let {
     text,
@@ -14,6 +14,8 @@
     onreconnect,
     privateFolder,
     onreconnectprivate,
+    git,
+    ongit,
   }: {
     text: string;
     saveStatus: SaveStatus;
@@ -24,7 +26,19 @@
     onreconnect: () => void;
     privateFolder: FolderStatus;
     onreconnectprivate: () => void;
+    git: GitState;
+    /** Syncs now, or opens the folder settings when sync needs attention. */
+    ongit: () => void;
   } = $props();
+
+  const gitLabel = $derived.by(() => {
+    if (git.status === 'paused') return 'Sync paused';
+    if (git.status !== 'on') return '';
+    if (git.syncing) return 'Syncing…';
+    if (git.error) return 'Sync failed';
+    if (git.unpushed) return 'Changes not synced yet';
+    return git.lastSync ? `Synced ${formatTime(git.lastSync)}` : 'Synced';
+  });
 
   const words = $derived(countWords(text));
   const chars = $derived(text.length);
@@ -76,6 +90,21 @@
         >Folder error: retry “{folder.name}”</button
       >
     {/if}
+    {#if gitLabel && git.status !== 'unavailable'}
+      <button
+        class="gitsync"
+        class:warn={git.status === 'on' && !!git.error}
+        onclick={ongit}
+        title={git.status === 'on'
+          ? (git.error ?? `Syncs with ${git.remote ?? 'its repository'}. Click to sync now.`)
+          : 'Sync between Macs is paused on this Mac'}
+        ><span
+          class="dot"
+          class:ok={git.status === 'on' && !git.error && !git.unpushed && !git.syncing}
+          class:busy={git.status === 'on' && (git.unpushed || git.syncing)}
+        ></span>{gitLabel}</button
+      >
+    {/if}
     {#if privateFolder.status === 'connected'}
       <span
         class="synced"
@@ -123,6 +152,14 @@
   }
   .dot.ok {
     background: #16a34a;
+  }
+  .gitsync {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dot.busy {
+    background: #d97706;
   }
   .dot.private {
     background: var(--fg-faint);

@@ -9,6 +9,8 @@ export const MENU_COMMANDS = [
   'save',
   'folder',
   'folder-private',
+  'git-setup',
+  'git-sync',
   'export:md-clean',
   'export:md-original',
   'export:md-critic',

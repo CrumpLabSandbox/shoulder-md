@@ -29,6 +29,13 @@ contextBridge.exposeInMainWorld('shoulderApp', {
       return () => ipcRenderer.removeListener('claude:event', listener);
     },
   },
+  git: {
+    status: (folder) => ipcRenderer.invoke('git:status', folder),
+    check: (url) => ipcRenderer.invoke('git:check', url),
+    setup: (folder, url, opts) => ipcRenderer.invoke('git:setup', folder, url, opts),
+    sync: (folder) => ipcRenderer.invoke('git:sync', folder),
+    stop: (folder) => ipcRenderer.invoke('git:stop', folder),
+  },
   setMenuState: (state) => ipcRenderer.send('menu:state', state),
   onMenu: (handler) => {
     const listener = (_event, command) => handler(command);

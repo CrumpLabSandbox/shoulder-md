@@ -14,6 +14,7 @@ import {
   draftGuide,
   suggestPrinciples,
 } from './claude.mjs';
+import { checkRemote, setup as gitSetup, status as gitStatus, sync as gitSync } from './git.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(here, '..', 'dist');
@@ -186,6 +187,60 @@ function registerClaudeHandlers() {
   ipcMain.handle('claude:cancel', () => cancelClaude());
 }
 
+/* ---------- git sync (git-sync.md) ---------- */
+
+/** Folders synced this session, so quitting can push what is left. */
+const syncing = new Set();
+
+function registerGitHandlers() {
+  const checkFolder = (folder) => {
+    if (!granted.includes(folder)) throw new Error('That folder has not been opened in the app.');
+  };
+  ipcMain.handle('git:status', async (_e, folder) => {
+    checkFolder(folder);
+    return gitStatus(folder);
+  });
+  ipcMain.handle('git:check', (_e, url) => checkRemote(String(url)));
+  ipcMain.handle('git:setup', async (_e, folder, url, opts) => {
+    checkFolder(folder);
+    const r = await gitSetup(folder, String(url), {
+      rename: !!opts?.rename,
+      combine: !!opts?.combine,
+    });
+    if (r.ok && r.folder !== folder) {
+      // The folder was renamed after the repository: the grant follows it.
+      granted = granted.map((g) =>
+        g === folder
+          ? r.folder
+          : g.startsWith(folder + path.sep)
+            ? r.folder + g.slice(folder.length)
+            : g,
+      );
+      await fs.writeFile(grantsFile(), JSON.stringify(granted, null, 2));
+    }
+    if (r.ok) syncing.add(r.folder);
+    return r.ok ? { ...r, name: path.basename(r.folder) } : r;
+  });
+  ipcMain.handle('git:stop', (_e, folder) => void syncing.delete(folder));
+  ipcMain.handle('git:sync', async (_e, folder) => {
+    checkFolder(folder);
+    syncing.add(folder);
+    return gitSync(folder);
+  });
+}
+
+// On quit, push what is left (with a time limit, so quitting never hangs).
+let quitting = false;
+app.on('before-quit', (event) => {
+  if (quitting || syncing.size === 0) return;
+  event.preventDefault();
+  quitting = true;
+  const limit = new Promise((resolve) => setTimeout(resolve, 10_000));
+  void Promise.race([Promise.all([...syncing].map((f) => gitSync(f))), limit]).finally(() =>
+    app.quit(),
+  );
+});
+
 /* ---------- window ---------- */
 
 const isOurs = (url) => url.startsWith(APP_URL) || (!!DEV_URL && url.startsWith(DEV_URL));
@@ -278,6 +333,7 @@ app.whenReady().then(async () => {
   await loadGrants();
   registerFolderHandlers();
   registerClaudeHandlers();
+  registerGitHandlers();
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate(send, app.name)));
   // The page reports its state so Track Changes, the view and the layout show their marks.
   ipcMain.on('menu:state', (_e, state) => {

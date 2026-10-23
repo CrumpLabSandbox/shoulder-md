@@ -1,11 +1,14 @@
 <script lang="ts">
   import type { FolderStatus, Workspace } from '../docs/workspace.svelte';
   import type { FolderKind } from '../persist/idb';
+  import { formatTime } from '../util/time';
 
   /** Where documents are kept on disk: the shared folder and the private folder. */
   let { ws }: { ws: Workspace } = $props();
 
   const n = $derived(ws.privateUnsynced);
+  const g = $derived(ws.git);
+  const when = (t: number | undefined) => (t ? formatTime(t) : '');
 </script>
 
 {#snippet controls(f: FolderStatus, kind: FolderKind)}
@@ -50,6 +53,42 @@
           made to a document's files elsewhere come back as tracked changes.
         </p>
         {@render controls(ws.folder, 'shared')}
+        {#if g.status !== 'unavailable'}
+          <div class="git">
+            <h4>Sync between Macs</h4>
+            {#if g.status === 'off' && g.gitMissing}
+              <p class="hint">
+                Needs git, which comes with Apple’s command line tools: run
+                <code>xcode-select --install</code> in Terminal.
+              </p>
+            {:else if g.status === 'off'}
+              <p class="hint">
+                Keep this folder the same on each of your Macs through a private git repository.
+              </p>
+              <div class="buttons">
+                <button onclick={() => ws.openGitSetup()}>Set up sync…</button>
+              </div>
+            {:else if g.status === 'paused'}
+              <p class="state">Paused on this Mac{g.remote ? ` (${g.remote})` : ''}.</p>
+              <div class="buttons">
+                <button onclick={() => ws.resumeGit()}>Resume syncing</button>
+              </div>
+            {:else}
+              <p class="state">
+                With <code>{g.remote ?? 'its repository'}</code>{g.syncing
+                  ? ': syncing…'
+                  : g.lastSync
+                    ? `, last synced ${when(g.lastSync)}`
+                    : ''}
+              </p>
+              {#if g.error}<p class="state warn">{g.error}</p>{/if}
+              <div class="buttons">
+                <button disabled={g.syncing} onclick={() => void ws.syncGit()}>Sync now</button>
+                <button onclick={() => ws.pauseGit()}>Pause on this Mac</button>
+              </div>
+            {/if}
+          </div>
+        {/if}
       </section>
       <section>
         <h3>Private folder</h3>
@@ -90,6 +129,19 @@
     margin: 0;
     font-size: 13px;
     font-weight: 600;
+  }
+  h4 {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .git {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
   }
   .pair {
     display: grid;

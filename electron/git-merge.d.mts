@@ -1,0 +1,14 @@
+export function pickHistory(oursText: string, theirsText: string): 'ours' | 'theirs' | 'both';
+export const JSON_EXT: string;
+export function conflictName(file: string, stamp: string): string;
+export function mdFor(jsonFile: string): string;
+export function jsonFor(mdFile: string): string;
+export function stamp(d?: Date): string;
+export function changedNames(paths: string[]): string;
+export const IGNORE_LINES: string[];
+export const ATTRIBUTE_LINES: string[];
+export function withLines(existing: string, wanted: string[], heading: string): string | undefined;
+export function validRemote(url: unknown): boolean;
+export function repoName(url: string): string;
+export function classify(stderr: string): 'not-found' | 'auth' | 'network' | 'other';
+export const REASON_TEXT: Record<string, string>;

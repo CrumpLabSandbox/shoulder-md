@@ -99,6 +99,10 @@ The **Principle inbox** in the Library has Claude read the edits you gave reason
 - Claude Code is allowed to read the folder, write `*.proposals.json` files (and, in a chat, one `*.revision.md` copy per document), and run the skill's helper script. Nothing else is permitted while it runs unattended, and it never writes to a document's own files.
 - The app copies its skills (`propose-edits`, `draft-principles`, `suggest-principles`) into `.claude/skills/` inside your shared folder.
 
+#### Syncing between Macs
+
+File → Set Up Sync… keeps the shared folder the same on several Macs through a private git repository (GitHub, or any git server). Shoulder uses the Mac's own git and its existing sign-in; it never asks for a password or token. It pulls when it opens, when you come back to it and every few minutes, and pushes shortly after changes and when you quit. When two Macs changed the same document, the longer history wins if one extends the other; otherwise this Mac's version is kept and the other is saved beside it. Claude's pending suggestions, and your writing samples in `Style/Samples/`, stay on each Mac. See [docs/git-sync-setup.md](docs/git-sync-setup.md) for making the repository and signing in.
+
 The Mac app keeps its documents in its own storage, separate from any browser. To bring existing work in, choose your synced folder with File → Choose Shared Folder…; the documents and guides in it are added. Use either the browser or the Mac app on a given folder, not both at once.
 
 Next: measuring whether the guides make Claude edit more like you, once there are enough reasoned edits to test against.

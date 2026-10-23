@@ -44,6 +44,8 @@ export function menuTemplate(send, appName) {
         item('Save Now', 'save', 'Cmd+S'),
         item('Choose Shared Folder…', 'folder'),
         item('Choose Private Folder…', 'folder-private'),
+        item('Set Up Sync…', 'git-setup'),
+        item('Sync Now', 'git-sync'),
         sep,
         {
           label: 'Export',

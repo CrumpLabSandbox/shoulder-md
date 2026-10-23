@@ -2,7 +2,7 @@
 
 A browser-based Markdown editor with Word-style tracked changes and comments, built on a structured JSON layer that records every edit and the reason for it. Exports to Markdown, Word, PDF, or the full JSON. Over time, a library of edited documents whose history can teach Claude to edit the way this writer edits.
 
-Status: phases 0 to 7 built (writing app with autosave, fonts and preview; sentence-level model and op log; Word-style tracked changes with reasons, accept/reject, views, and model-level undo; comment threads in the same margin; exports to Markdown, CriticMarkup, Word, JSON and PDF, with CriticMarkup and JSON import; the edits library with its JSONL change-record export; folder sync to a local directory or git repo; style guides with stable principle ids, genres, the per-document Claude switch and the private folder). Phase 9 (Claude proposing edits as tracked changes, through Claude Code and the shared folder) is also built. A Mac app (Electron shell with native menus and direct folder access) wraps the same build. Phase 8 (the principle inbox) is built. Next is phase 10, measurement, once the guides have enough reasoned edits behind them. This document is the spec for v1 and the roadmap after it.
+Status: phases 0 to 7 built (writing app with autosave, fonts and preview; sentence-level model and op log; Word-style tracked changes with reasons, accept/reject, views, and model-level undo; comment threads in the same margin; exports to Markdown, CriticMarkup, Word, JSON and PDF, with CriticMarkup and JSON import; the edits library with its JSONL change-record export; folder sync to a local directory or git repo; style guides with stable principle ids, genres, the per-document Claude switch and the private folder). Phase 9 (Claude proposing edits as tracked changes, through Claude Code and the shared folder) is also built. A Mac app (Electron shell with native menus and direct folder access) wraps the same build. Phase 8 (the principle inbox) is built. Phase 12 (git sync of the shared folder between Macs) is built. Next is phase 10, measurement, once the guides have enough reasoned edits behind them. This document is the spec for v1 and the roadmap after it.
 
 ---
 
@@ -466,6 +466,9 @@ Each phase ends with something usable. Phases 0 and 1 overlap in time.
 
 ### Phase 11: Linked documents (spec, not built)
 - Edit a Markdown file where it lives (a `.qmd` in a git repo, notes in a project folder) with no hand copying: the app holds a grant to that one file, writes the clean text to it after each save, and reads outside edits back as tracked changes by "Edited on disk". The library copy keeps the history; Claude only sees it in the shared folder, and never the outside path. Spec in `linked-documents.md`.
+
+### Phase 12: Git sync (built for the shared folder)
+- The shared folder becomes a clone of a private git repository, so one library works on several Macs. The app runs the Mac's own git with a fixed set of commands and its existing sign-in (no tokens in the app), pulls on launch, focus and every few minutes, pushes after saves, and settles conflicts itself with the existing conflict copies, never leaving conflict markers. A first-run setup asks for the repository. Claude's pending requests are not committed. Built 2026-10-23: File → Set Up Sync… and Sync Now, a one-time offer, status in the status bar and the Library's folder panel, conflicts settled with conflict copies, a push on quit. Not yet: a repository for the private folder, and linked documents on a second Mac (needs phase 11). Spec in `git-sync.md`; setup walkthrough in `docs/git-sync-setup.md`.
 
 ### Later, unscheduled
 - Word import: plain text first, then revisions and comments.

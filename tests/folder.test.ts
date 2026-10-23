@@ -131,6 +131,23 @@ describe('FolderSync', () => {
     expect(await sync.check(d)).toMatchObject({ kind: 'invalid' });
   });
 
+  it('takes a version that arrived from elsewhere as its own, so it is not written back', async () => {
+    const fs = memoryDir();
+    const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed, FLAT);
+    const d = doc('Hello world.');
+    await sync.write(d);
+    expect(await sync.unchangedSinceWrite(d)).toBe(true);
+    expect(await sync.unchangedSinceWrite(withEdit(d, 'Mine. '))).toBe(false);
+    // Another Mac's longer history arrives through git.
+    const pulled = withEdit(d, 'More. ');
+    fs.writeOutside('hello-world.shoulder.json', exportJson(pulled));
+    fs.writeOutside('hello-world.md', viewText(pulled.state, 'clean'));
+    expect(await sync.check(d)).toMatchObject({ kind: 'json', extendsLocal: true });
+    await sync.acknowledge(pulled);
+    expect(await sync.check(pulled)).toEqual({ kind: 'none' });
+    expect(await sync.write(pulled)).toMatchObject({ written: false });
+  });
+
   it('writes again when a typing run grew its op without adding one', async () => {
     const fs = memoryDir();
     const sync = new FolderSync(fs.dir, memoryFolderStore(), fixed, FLAT);

@@ -58,11 +58,58 @@ export type ClaudeBridge = {
   onEvent(handler: (event: ClaudeEvent) => void): () => void;
 };
 
+export type GitFailure = {
+  ok: false;
+  /** 'busy' while Claude works in the folder; 'not-repo' when the folder does not sync. */
+  reason: 'no-git' | 'not-found' | 'auth' | 'network' | 'busy' | 'not-repo' | 'other';
+  error: string;
+};
+
+export type GitConflict = { file: string; kept: 'ours' | 'theirs' | 'both-merged'; copy?: string };
+
+/** Git sync for a folder (electron/git.mjs). Shoulder holds no credentials; git uses the Mac's. */
+export type GitBridge = {
+  status(folder: string): Promise<{
+    available: boolean;
+    repo: boolean;
+    remote?: string;
+    branch?: string;
+    dirty?: boolean;
+  }>;
+  /** Whether an address can be reached, and whether that repository is still empty. */
+  check(url: string): Promise<{ ok: true; empty: boolean } | GitFailure>;
+  setup(
+    folder: string,
+    url: string,
+    opts?: { rename?: boolean; combine?: boolean },
+  ): Promise<
+    | {
+        ok: true;
+        folder: string;
+        name: string;
+        cloned: boolean;
+        conflicts?: GitConflict[];
+        /** Set when renaming was asked for but a folder of that name already exists. */
+        renameSkipped?: string;
+      }
+    | { ok: false; needsChoice: true }
+    | GitFailure
+  >;
+  /** Tells the app this folder no longer syncs, so quitting does not push it. */
+  stop(folder: string): Promise<void>;
+  sync(
+    folder: string,
+  ): Promise<
+    { ok: true; changed: string[]; conflicts: GitConflict[]; pushed: boolean } | GitFailure
+  >;
+};
+
 export type AppBridge = {
   /** Opens the system folder dialog; null if cancelled. */
   pickFolder(): Promise<{ path: string; name: string } | null>;
   fs: NativeFs;
   claude: ClaudeBridge;
+  git: GitBridge;
   /** Tells the menu what to mark: Track Changes, the current view and layout, open panels. */
   setMenuState(state: {
     tracking: boolean;
