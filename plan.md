@@ -464,6 +464,9 @@ Each phase ends with something usable. Phases 0 and 1 overlap in time.
 - **Finish**: the window title shows the open document; the About panel describes the app; Track Changes, the view, the layout and the open panels carry marks in the menus, kept in step with the page; the window's size and position and the open panels are remembered between launches. The icon is built from an SVG in `build/icons/` with `pnpm icon <file.svg>` (which writes `build/icon.icns` and `build/icon.png`).
 - Packaged unsigned (ad-hoc) for this machine only; no auto-update or notarization yet.
 
+### Phase 11: Linked documents (spec, not built)
+- Edit a Markdown file where it lives (a `.qmd` in a git repo, notes in a project folder) with no hand copying: the app holds a grant to that one file, writes the clean text to it after each save, and reads outside edits back as tracked changes by "Edited on disk". The library copy keeps the history; Claude only sees it in the shared folder, and never the outside path. Spec in `linked-documents.md`.
+
 ### Later, unscheduled
 - Word import: plain text first, then revisions and comments.
 - Rich (WYSIWYG) mode over the same model.
